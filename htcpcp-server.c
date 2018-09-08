@@ -52,31 +52,43 @@ void access_log(const char *host, const char *ident, const char *authuser,
     struct tm* tm_info, const char *request_method, const char *request_path,
     const char *request_protocol, int status, int bytes)
 {
-    char datetime[26];
-    strftime(datetime, 26, "%d/%b/%Y:%H:%M:%S %z", tm_info);
+    char datetime[27];
+    strftime(datetime, 27, "%d/%b/%Y:%H:%M:%S %z", tm_info);
 
     logger(LOG_INFO, "%s %s %s [%s] \"%s %s %s\" %d %d\n",
         host, "-", "-", datetime, request_method, request_path,
         request_protocol, status, bytes);
 }
 
-int build_response(char *buffer, int status)
+int build_response(char *buffer, int status, const char *body)
 {
+    int len = 0;
     char status_line[50] = "Unknown";
 
-    if (status == 403) {
-        strncpy(status_line, "Forbidden", 50);
+    if (status == 400) {
+        strncpy(status_line, "Bad Request", 50);
     }
     if (status == 405) {
         strncpy(status_line, "Method Not Allowed", 50);
     }
+    if (status == 414) {
+        strncpy(status_line, "Request-URI Too Long", 50);
+    }
+    if (status == 200) {
+        strncpy(status_line, "OK", 50);
+    }
+    if (body != NULL) {
+        len = strlen(body);
+    }
 
     return sprintf(
         buffer,
-        "HTTP/1.1 %d %s\nServer: %s\nContent-Length: 0\nConnection: close\n\n",
+        "HTCPCP/1.0 %d %s\nServer: %s\nContent-Length: %d\nConnection: close\n\n%s",
         status,
         status_line,
-        "jorge-matricali/htcpcp"
+        "jorge-matricali/htcpcp",
+        len,
+        (body != NULL ? body : "")
     );
 }
 
@@ -96,8 +108,8 @@ void process_request(int socket_fd, const char *source)
     ret = read(socket_fd, buffer, BUFSIZE);
 
     if (ret == 0 || ret == -1) {
-        status_code = 403;
-        build_response(buffer, status_code);
+        status_code = 400;
+        build_response(buffer, status_code, NULL);
         goto send;
     }
 
@@ -109,14 +121,14 @@ void process_request(int socket_fd, const char *source)
     }
 
     /* Parsear cabeceras */
-    char request_method[100];
-    char request_path[255];
-    char request_protocol[100];
+    char request_method[100] = "";
+    char request_path[2084] = "";
+    char request_protocol[100] = "";
 
     int i;
     int t;
 
-    logger(LOG_DEBUG, "---BUFFER---\n%s\n---------\n", buffer);
+    // logger(LOG_DEBUG, "---BUFFER---\n%s\n---------\n", buffer);
 
     /* Request method */
     for (i = 0; i < ret; i++) {
@@ -132,6 +144,11 @@ void process_request(int socket_fd, const char *source)
             request_path[t] = 0;
             break;
         }
+        if (t >= 2083) {
+            status_code = 414;
+            build_response(buffer, status_code, NULL);
+            goto send;
+        }
         request_path[t] = buffer[i];
         t++;
     }
@@ -145,14 +162,34 @@ void process_request(int socket_fd, const char *source)
         t++;
     }
 
+    if (strncmp("HTCPCP/1.0", request_method, 11) != 0) {
+        /* Unsupported protocol */
+        status_code = 400;
+        build_response(buffer, status_code, NULL);
+        goto send;
+    }
+
+    if (strncmp("BREW", request_method, 5) == 0
+        || strncmp("POST", request_method, 5) == 0) {
+        status_code = 200;
+        build_response(buffer, status_code, "<h1>BREW received</h1>\n:D");
+        goto send;
+    }
+
+    if (strncmp("GET", request_method, 4) == 0) {
+        status_code = 200;
+        build_response(buffer, status_code, "<h1>GET received</h1>\n:)");
+        goto send;
+    }
+
     /* -------- */
     status_code = 405;
-    build_response(buffer, status_code);
+    build_response(buffer, status_code, NULL);
 
 send:
     write(socket_fd, buffer, strlen(buffer));
     access_log(source, "-", "-", tm_info, request_method, request_path,
-        request_protocol, 405, strlen(buffer));
+        request_protocol, status_code, strlen(buffer));
     sleep(1);
 
 cleanup:
