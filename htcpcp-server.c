@@ -23,6 +23,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <string.h>
+#include <time.h>
 
 #define BUFSIZE 8096
 
@@ -77,7 +78,7 @@ void process_request(int socket_fd, const char *source)
     int i;
     int t;
 
-    logger(LOG_DEBUG, "---BUFFER---\n%s\n---------", buffer);
+    logger(LOG_DEBUG, "---BUFFER---\n%s\n---------\n", buffer);
 
     /* Request method */
     for (i = 0; i < ret; i++) {
@@ -87,9 +88,8 @@ void process_request(int socket_fd, const char *source)
         }
         request_method[i] = buffer[i];
     }
-    i++;
     /* Request path */
-    for (t = 0; i < ret; i++) {
+    for (t = 0, i++; i < ret; i++) {
         if (buffer[i] == 0 || buffer[i] == ' ') {
             request_path[t] = 0;
             break;
@@ -97,9 +97,8 @@ void process_request(int socket_fd, const char *source)
         request_path[t] = buffer[i];
         t++;
     }
-    i++;
     /* Request protocol */
-    for (t = 0; i < ret - 1; i++) {
+    for (t = 0, i++; i < ret - 1; i++) {
         if (buffer[i] == 0 || (buffer[i] == '\r' && buffer[i+1] == '\n')) {
             request_protocol[t] = 0;
             break;
@@ -107,9 +106,19 @@ void process_request(int socket_fd, const char *source)
         request_protocol[t] = buffer[i];
         t++;
     }
-    logger(LOG_DEBUG, "method=<%s> path=<%s> protocol=<%s>",
+    logger(LOG_DEBUG, "method=<%s> path=<%s> protocol=<%s>\n",
         request_method, request_path, request_protocol);
 
+    time_t timer;
+    struct tm* tm_info;
+    time(&timer);
+    tm_info = localtime(&timer);
+    char datetime[100];
+    strftime(datetime, 100, "%d/%b/%Y:%H:%M:%S %z", tm_info);
+
+    logger(LOG_INFO, "%s %s %s [%s] \"%s %s %s\" status bytes\n",
+        source, "-", "-", datetime, request_method, request_path,
+        request_protocol);
     /* -------- */
 
     sprintf(
