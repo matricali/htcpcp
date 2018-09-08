@@ -22,6 +22,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <string.h>
+
+#define BUFSIZE 8096
 
 enum log_level {
     LOG_NONE,
@@ -47,6 +50,81 @@ void logger(enum log_level level, const char *format, ...) {
 void process_request(int socket_fd, const char *source)
 {
     printf("> %s\n", source);
+
+    long ret;
+    static char buffer[BUFSIZE + 1];
+
+    ret = read(socket_fd, buffer, BUFSIZE);
+
+    if (ret == 0 || ret == -1) {
+        write(socket_fd, "HTTP/1.1 403 Forbidden\r\n\r\n", 26);
+        logger(LOG_ERROR, "403 Forbidden\tFailed to read browser request.\n");
+        goto cleanup;
+    }
+
+    if (ret > 0 && ret < BUFSIZE) {
+        /* Cerrar buffer */
+        buffer[ret] = 0;
+    } else {
+        buffer[0] = 0;
+    }
+
+    /* Parsear cabeceras */
+    char request_method[100];
+    char request_path[255];
+    char request_protocol[100];
+
+    int i;
+    int t;
+
+    logger(LOG_DEBUG, "---BUFFER---\n%s\n---------", buffer);
+
+    /* Request method */
+    for (i = 0; i < ret; i++) {
+        if (buffer[i] == 0 || buffer[i] == ' ') {
+            request_method[i] = 0;
+            break;
+        }
+        request_method[i] = buffer[i];
+    }
+    i++;
+    /* Request path */
+    for (t = 0; i < ret; i++) {
+        if (buffer[i] == 0 || buffer[i] == ' ') {
+            request_path[t] = 0;
+            break;
+        }
+        request_path[t] = buffer[i];
+        t++;
+    }
+    i++;
+    /* Request protocol */
+    for (t = 0; i < ret - 1; i++) {
+        if (buffer[i] == 0 || (buffer[i] == '\r' && buffer[i+1] == '\n')) {
+            request_protocol[t] = 0;
+            break;
+        }
+        request_protocol[t] = buffer[i];
+        t++;
+    }
+    logger(LOG_DEBUG, "method=<%s> path=<%s> protocol=<%s>",
+        request_method, request_path, request_protocol);
+
+    /* -------- */
+
+    sprintf(
+        buffer,
+        "HTTP/1.1 405 Method Not Allowed\nServer: %s\nContent-Length: 0\nConnection: close\n\n",
+        "jorge-matricali/htcpcp"
+    );
+
+    write(socket_fd, buffer, strlen(buffer));
+    sleep(1);
+
+cleanup:
+    logger(LOG_DEBUG, "Closing connection.\n");
+    close(socket_fd);
+    exit(EXIT_SUCCESS);
 }
 
 int main(int argc, char *argv[])
