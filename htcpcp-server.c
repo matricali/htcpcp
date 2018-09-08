@@ -48,19 +48,57 @@ void logger(enum log_level level, const char *format, ...) {
     va_end (args);
 }
 
+void access_log(const char *host, const char *ident, const char *authuser,
+    struct tm* tm_info, const char *request_method, const char *request_path,
+    const char *request_protocol, int status, int bytes)
+{
+    char datetime[26];
+    strftime(datetime, 26, "%d/%b/%Y:%H:%M:%S %z", tm_info);
+
+    logger(LOG_INFO, "%s %s %s [%s] \"%s %s %s\" %d %d\n",
+        host, "-", "-", datetime, request_method, request_path,
+        request_protocol, status, bytes);
+}
+
+int build_response(char *buffer, int status)
+{
+    char status_line[50] = "Unknown";
+
+    if (status == 403) {
+        strncpy(status_line, "Forbidden", 50);
+    }
+    if (status == 405) {
+        strncpy(status_line, "Method Not Allowed", 50);
+    }
+
+    return sprintf(
+        buffer,
+        "HTTP/1.1 %d %s\nServer: %s\nContent-Length: 0\nConnection: close\n\n",
+        status,
+        status_line,
+        "jorge-matricali/htcpcp"
+    );
+}
+
 void process_request(int socket_fd, const char *source)
 {
-    printf("> %s\n", source);
-
     long ret;
     static char buffer[BUFSIZE + 1];
+    int status_code = 200;
+    time_t timer;
+    struct tm* tm_info;
 
+    /* Request time */
+    time(&timer);
+    tm_info = localtime(&timer);
+
+    /* Read buffer */
     ret = read(socket_fd, buffer, BUFSIZE);
 
     if (ret == 0 || ret == -1) {
-        write(socket_fd, "HTTP/1.1 403 Forbidden\r\n\r\n", 26);
-        logger(LOG_ERROR, "403 Forbidden\tFailed to read browser request.\n");
-        goto cleanup;
+        status_code = 403;
+        build_response(buffer, status_code);
+        goto send;
     }
 
     if (ret > 0 && ret < BUFSIZE) {
@@ -106,28 +144,15 @@ void process_request(int socket_fd, const char *source)
         request_protocol[t] = buffer[i];
         t++;
     }
-    logger(LOG_DEBUG, "method=<%s> path=<%s> protocol=<%s>\n",
-        request_method, request_path, request_protocol);
 
-    time_t timer;
-    struct tm* tm_info;
-    time(&timer);
-    tm_info = localtime(&timer);
-    char datetime[100];
-    strftime(datetime, 100, "%d/%b/%Y:%H:%M:%S %z", tm_info);
-
-    logger(LOG_INFO, "%s %s %s [%s] \"%s %s %s\" status bytes\n",
-        source, "-", "-", datetime, request_method, request_path,
-        request_protocol);
     /* -------- */
+    status_code = 405;
+    build_response(buffer, status_code);
 
-    sprintf(
-        buffer,
-        "HTTP/1.1 405 Method Not Allowed\nServer: %s\nContent-Length: 0\nConnection: close\n\n",
-        "jorge-matricali/htcpcp"
-    );
-
+send:
     write(socket_fd, buffer, strlen(buffer));
+    access_log(source, "-", "-", tm_info, request_method, request_path,
+        request_protocol, 405, strlen(buffer));
     sleep(1);
 
 cleanup:
