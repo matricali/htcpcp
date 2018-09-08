@@ -26,6 +26,8 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <time.h>
 
 #define BUFSIZE 8096
+#define MAX_CHILDS 10
+#define LISTEN_BACKLOG 500
 
 enum log_level {
     LOG_NONE,
@@ -38,13 +40,21 @@ enum log_level {
     LOG_NEVER
 };
 
+FILE *log_file = NULL;
+
 void logger(enum log_level level, const char *format, ...) {
     if (level == LOG_NEVER || level == LOG_NONE) {
         return;
     }
+    FILE *stream = stderr;
+
+    if (level == LOG_INFO || level == LOG_NOTICE) {
+        stream = stdout;
+    }
+
     va_list args;
     va_start(args, format);
-    vfprintf(stdout, format, args);
+    vfprintf(stream, format, args);
     va_end (args);
 }
 
@@ -58,6 +68,12 @@ void access_log(const char *host, const char *ident, const char *authuser,
     logger(LOG_INFO, "%s %s %s [%s] \"%s %s %s\" %d %d\n",
         host, "-", "-", datetime, request_method, request_path,
         request_protocol, status, bytes);
+
+    if (log_file > 0) {
+        fprintf(log_file, "%s %s %s [%s] \"%s %s %s\" %d %d\n",
+            host, "-", "-", datetime, request_method, request_path,
+            request_protocol, status, bytes);
+    }
 }
 
 int build_response(char *buffer, int status, const char *body)
@@ -65,6 +81,12 @@ int build_response(char *buffer, int status, const char *body)
     int len = 0;
     char status_line[50] = "Unknown";
 
+    if (status == 503) {
+        strncpy(status_line, "Service Unavailable", 50);
+    }
+    if (status == 505) {
+        strncpy(status_line, "HTTP Version Not Supported", 50);
+    }
     if (status == 400) {
         strncpy(status_line, "Bad Request", 50);
     }
@@ -83,7 +105,7 @@ int build_response(char *buffer, int status, const char *body)
 
     return sprintf(
         buffer,
-        "HTCPCP/1.0 %d %s\nServer: %s\nContent-Length: %d\nConnection: close\n\n%s",
+        "HTTP/1.1 %d %s\nServer: %s\nContent-Length: %d\nConnection: close\n\n%s",
         status,
         status_line,
         "jorge-matricali/htcpcp",
@@ -162,9 +184,9 @@ void process_request(int socket_fd, const char *source)
         t++;
     }
 
-    if (strncmp("HTCPCP/1.0", request_method, 11) != 0) {
+    if (strncmp("HTTP/1.1", request_protocol, 9) != 0) {
         /* Unsupported protocol */
-        status_code = 400;
+        status_code = 505;
         build_response(buffer, status_code, NULL);
         goto send;
     }
@@ -190,12 +212,11 @@ send:
     write(socket_fd, buffer, strlen(buffer));
     access_log(source, "-", "-", tm_info, request_method, request_path,
         request_protocol, status_code, strlen(buffer));
-    sleep(1);
 
 cleanup:
     logger(LOG_DEBUG, "Closing connection.\n");
+    shutdown(socket_fd, SHUT_RDWR);
     close(socket_fd);
-    exit(EXIT_SUCCESS);
 }
 
 int main(int argc, char *argv[])
@@ -204,13 +225,20 @@ int main(int argc, char *argv[])
     int listenfd;
     int socketfd;
     int pid;
+    pid_t children[MAX_CHILDS];
     int option = 1;
 
     static struct sockaddr_in serv_addr;
     static struct sockaddr_in cli_addr;
     socklen_t len = 0;
 
-    printf("Starting htcpcp-server on port %d...\n", port);
+    /* Access log */
+    log_file = fopen("access.log", "a");
+    if (log_file < 0) {
+        logger(LOG_ERROR, "Error opening log file.\n");
+    }
+
+    logger(LOG_INFO, "Starting htcpcp-server on port %d...\n", port);
 
     listenfd = socket(AF_INET, SOCK_STREAM, 0);
     if (listenfd < 0) {
@@ -230,39 +258,51 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    if (listen(listenfd, 64) < 0) {
+    if (listen(listenfd, LISTEN_BACKLOG) < 0) {
         logger(LOG_FATAL, "Cannot listen on port\n");
         return EXIT_FAILURE;
     }
 
-    for (;;) {
-        len = sizeof(cli_addr);
-
-        socketfd = accept(listenfd, (struct sockaddr *) &cli_addr, &len);
-
-        char client_address[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &(cli_addr.sin_addr), client_address, INET_ADDRSTRLEN);
-
-        if (socketfd < 0) {
-            logger(LOG_FATAL, "Cannot accept incoming connection from %s\n", client_address);
-            (void) close(socketfd);
-            return EXIT_FAILURE;
-        }
-
-        logger(LOG_INFO, "Incoming connection from %s\n", client_address);
-
+    for (int i = 0; i < MAX_CHILDS; i++) {
         pid = fork();
+
         if (pid < 0) {
             logger(LOG_FATAL, "Cannot fork!\n");
-            return EXIT_FAILURE;
+            break;
+        }
+
+        if (pid) {
+            children[i] = pid;
         }
 
         if (pid == 0) {
-            (void) close(listenfd);
-            process_request(socketfd, client_address);
-            exit(EXIT_SUCCESS);
-        } else {
-            (void) close(socketfd);
+            /* Child process */
+            for (;;) {
+                len = sizeof(cli_addr);
+
+                socketfd = accept(listenfd, (struct sockaddr *) &cli_addr, &len);
+
+                char client_address[INET_ADDRSTRLEN];
+                inet_ntop(AF_INET, &(cli_addr.sin_addr), client_address, INET_ADDRSTRLEN);
+
+                if (socketfd < 0) {
+                    logger(LOG_FATAL, "Cannot accept incoming connection from %s\n", client_address);
+                    close(socketfd);
+                    continue;
+                }
+
+                logger(LOG_DEBUG, "Incoming connection from: %s\n", client_address);
+                process_request(socketfd, client_address);
+            }
         }
+    }
+
+    for (int i = 0; i < MAX_CHILDS; i++) {
+        waitpid(children[i], NULL, 0);
+    }
+
+    /* Access log */
+    if (log_file != NULL) {
+        fclose(log_file);
     }
 }
