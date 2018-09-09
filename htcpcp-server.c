@@ -28,6 +28,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define BUFSIZE 8096
 #define MAX_CHILDS 10
 #define LISTEN_BACKLOG 500
+#define PROTOCOL "HTCPCP/1.0"
 
 enum log_level {
     LOG_NONE,
@@ -73,41 +74,49 @@ void access_log(const char *host, const char *ident, const char *authuser,
         fprintf(log_file, "%s %s %s [%s] \"%s %s %s\" %d %d\n",
             host, "-", "-", datetime, request_method, request_path,
             request_protocol, status, bytes);
+        fflush(log_file);
     }
 }
 
-int build_response(char *buffer, int status, const char *body)
+int build_response(char *buffer, int status, const char *headers,
+    const char *body)
 {
     int len = 0;
     char status_line[50] = "Unknown";
 
     if (status == 503) {
-        strncpy(status_line, "Service Unavailable", 50);
+        strlcpy(status_line, "Service Unavailable", 50);
     }
     if (status == 505) {
-        strncpy(status_line, "HTTP Version Not Supported", 50);
+        strlcpy(status_line, "HTTP Version Not Supported", 50);
     }
     if (status == 400) {
-        strncpy(status_line, "Bad Request", 50);
+        strlcpy(status_line, "Bad Request", 50);
     }
-    if (status == 405) {
-        strncpy(status_line, "Method Not Allowed", 50);
+    if (status == 406) {
+        strlcpy(status_line, "Not Acceptable", 50);
+    }
+    if (status == 418) {
+        strlcpy(status_line, "I'm a teapot", 50);
     }
     if (status == 414) {
-        strncpy(status_line, "Request-URI Too Long", 50);
+        strlcpy(status_line, "Request-URI Too Long", 50);
     }
     if (status == 200) {
-        strncpy(status_line, "OK", 50);
+        strlcpy(status_line, "OK", 50);
     }
     if (body != NULL) {
         len = strlen(body);
     }
 
-    return sprintf(
+    return snprintf(
         buffer,
-        "HTTP/1.1 %d %s\nServer: %s\nContent-Length: %d\nConnection: close\n\n%s",
+        sizeof(buffer),
+        "%s %d %s\n%sServer: %s\nContent-Length: %d\nConnection: close\n\n%s",
+        PROTOCOL,
         status,
         status_line,
+        (headers != NULL ? headers : ""),
         "jorge-matricali/htcpcp",
         len,
         (body != NULL ? body : "")
@@ -131,7 +140,7 @@ void process_request(int socket_fd, const char *source)
 
     if (ret == 0 || ret == -1) {
         status_code = 400;
-        build_response(buffer, status_code, NULL);
+        build_response(buffer, status_code, NULL, NULL);
         goto send;
     }
 
@@ -150,8 +159,6 @@ void process_request(int socket_fd, const char *source)
     int i;
     int t;
 
-    // logger(LOG_DEBUG, "---BUFFER---\n%s\n---------\n", buffer);
-
     /* Request method */
     for (i = 0; i < ret; i++) {
         if (buffer[i] == 0 || buffer[i] == ' ') {
@@ -168,7 +175,7 @@ void process_request(int socket_fd, const char *source)
         }
         if (t >= 2083) {
             status_code = 414;
-            build_response(buffer, status_code, NULL);
+            build_response(buffer, status_code, NULL, NULL);
             goto send;
         }
         request_path[t] = buffer[i];
@@ -183,30 +190,49 @@ void process_request(int socket_fd, const char *source)
         request_protocol[t] = buffer[i];
         t++;
     }
-
-    if (strncmp("HTTP/1.1", request_protocol, 9) != 0) {
+    if (strncmp(PROTOCOL, request_protocol, 1+strlen(PROTOCOL)) != 0) {
         /* Unsupported protocol */
         status_code = 505;
-        build_response(buffer, status_code, NULL);
+        build_response(buffer, status_code, NULL, NULL);
         goto send;
     }
 
+    // @TODO: Validate resource
+
     if (strncmp("BREW", request_method, 5) == 0
         || strncmp("POST", request_method, 5) == 0) {
+        // @TODO: Content-Type MUST be "application/coffee-pot-command"
+        // @TODO: Add response header "Safe: no"
+        // @TODO: Parse "Accept-Additions" headers
+        // @TODO: 406 Not Acceptable
+        // @TODO: Parse body. coffee-message-body = "start" | "stop"
         status_code = 200;
-        build_response(buffer, status_code, "<h1>BREW received</h1>\n:D");
+        build_response(buffer, status_code, NULL, NULL);
         goto send;
     }
 
     if (strncmp("GET", request_method, 4) == 0) {
         status_code = 200;
-        build_response(buffer, status_code, "<h1>GET received</h1>\n:)");
+        build_response(buffer, status_code, NULL, "<h1>GET received</h1>\n:)");
         goto send;
     }
 
-    /* -------- */
-    status_code = 405;
-    build_response(buffer, status_code, NULL);
+    if (strncmp("PROPFIND", request_method, 9) == 0) {
+        status_code = 200;
+        build_response(buffer, status_code, "Content-Type: message/coffepot\n",
+            "Pot ready to brew");
+        goto send;
+    }
+
+    if (strncmp("WHEN", request_method, 5) == 0) {
+        status_code = 406;
+        build_response(buffer, status_code, "Additions-List: MILK\n", NULL);
+        goto send;
+    }
+
+    /* I'm a teapot :D */
+    status_code = 418;
+    build_response(buffer, status_code, NULL, NULL);
 
 send:
     write(socket_fd, buffer, strlen(buffer));
