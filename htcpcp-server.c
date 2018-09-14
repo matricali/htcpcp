@@ -43,14 +43,19 @@ enum log_level {
 };
 
 FILE *log_file = NULL;
+int g_verbose = 0;
 
 void logger(enum log_level level, const char *format, ...) {
     if (level == LOG_NEVER || level == LOG_NONE) {
         return;
     }
+    if (level == LOG_DEBUG && g_verbose == 0) {
+        return;
+    }
+
     FILE *stream = stderr;
 
-    if (level == LOG_INFO || level == LOG_NOTICE) {
+    if (level == LOG_INFO || level == LOG_NOTICE || level == LOG_DEBUG) {
         stream = stdout;
     }
 
