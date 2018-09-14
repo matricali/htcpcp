@@ -85,33 +85,32 @@ int build_response(char *buffer, int status, const char *headers,
     char status_line[50] = "Unknown";
 
     if (status == 503) {
-        strlcpy(status_line, "Service Unavailable", 50);
+        strncpy(status_line, "Service Unavailable", 50);
     }
     if (status == 505) {
-        strlcpy(status_line, "HTTP Version Not Supported", 50);
+        strncpy(status_line, "HTTP Version Not Supported", 50);
     }
     if (status == 400) {
-        strlcpy(status_line, "Bad Request", 50);
+        strncpy(status_line, "Bad Request", 50);
     }
     if (status == 406) {
-        strlcpy(status_line, "Not Acceptable", 50);
+        strncpy(status_line, "Not Acceptable", 50);
     }
     if (status == 418) {
-        strlcpy(status_line, "I'm a teapot", 50);
+        strncpy(status_line, "I'm a teapot", 50);
     }
     if (status == 414) {
-        strlcpy(status_line, "Request-URI Too Long", 50);
+        strncpy(status_line, "Request-URI Too Long", 50);
     }
     if (status == 200) {
-        strlcpy(status_line, "OK", 50);
+        strncpy(status_line, "OK", 50);
     }
     if (body != NULL) {
         len = strlen(body);
     }
 
-    return snprintf(
+    return sprintf(
         buffer,
-        sizeof(buffer),
         "%s %d %s\n%sServer: %s\nContent-Length: %d\nConnection: close\n\n%s",
         PROTOCOL,
         status,
@@ -135,6 +134,11 @@ void process_request(int socket_fd, const char *source)
     time(&timer);
     tm_info = localtime(&timer);
 
+    /* Parsear cabeceras */
+    char request_method[100] = "";
+    char request_path[2084] = "";
+    char request_protocol[100] = "";
+
     /* Read buffer */
     ret = read(socket_fd, buffer, BUFSIZE);
 
@@ -151,15 +155,14 @@ void process_request(int socket_fd, const char *source)
         buffer[0] = 0;
     }
 
-    /* Parsear cabeceras */
-    char request_method[100] = "";
-    char request_path[2084] = "";
-    char request_protocol[100] = "";
-
+    /*
+    Parsing request-line
+    https://tools.ietf.org/html/rfc2616#section-5.1
+    */
     int i;
     int t;
 
-    /* Request method */
+    /* 5.1.1 Method */
     for (i = 0; i < ret; i++) {
         if (buffer[i] == 0 || buffer[i] == ' ') {
             request_method[i] = 0;
@@ -167,7 +170,7 @@ void process_request(int socket_fd, const char *source)
         }
         request_method[i] = buffer[i];
     }
-    /* Request path */
+    /* 5.1.2 Request-URI */
     for (t = 0, i++; i < ret; i++) {
         if (buffer[i] == 0 || buffer[i] == ' ') {
             request_path[t] = 0;
@@ -181,10 +184,12 @@ void process_request(int socket_fd, const char *source)
         request_path[t] = buffer[i];
         t++;
     }
-    /* Request protocol */
+    /* Request protocol version */
     for (t = 0, i++; i < ret - 1; i++) {
-        if (buffer[i] == 0 || (buffer[i] == '\r' && buffer[i+1] == '\n')) {
+        if (buffer[i] == 0 || buffer[i] == ' '
+        || (buffer[i] == '\r' && buffer[i+1] == '\n')) {
             request_protocol[t] = 0;
+            i++;
             break;
         }
         request_protocol[t] = buffer[i];
@@ -195,6 +200,54 @@ void process_request(int socket_fd, const char *source)
         status_code = 505;
         build_response(buffer, status_code, NULL, NULL);
         goto send;
+    }
+
+    /* 4.2 Message Headers */
+    char header_name[2048] = {0};
+    char header_value[2048] = {0};
+
+    while (i++ < ret - 1) {
+        if (buffer[i] == '\r' && buffer[i+1] == '\n') {
+            break;
+        }
+        /* Nombre */
+        char f = 0;
+        for (t = 0; i < ret - 1; i++) {
+            if (f == 0 && buffer[i] == ' ') {
+                continue;
+            }
+            f = 1;
+            if (buffer[i] == 0 || buffer[i] == ':') {
+                header_name[t] = 0;
+                break;
+            }
+            if (buffer[i] == '\r' && buffer[i+1] == '\n') {
+                header_name[t] = 0;
+                i++;
+                break;
+            }
+            header_name[t] = buffer[i];
+            t++;
+        }
+        /* Valor */
+        f = 0;
+        for (t = 0, i++; i < ret - 1; i++) {
+            if (f == 0 && buffer[i] == ' ') {
+                continue;
+            }
+            f = 1;
+            if (buffer[i] == 0
+            || (buffer[i] == '\r' && buffer[i+1] == '\n')) {
+                header_value[t] = 0;
+                if (buffer[i] == '\r' && buffer[i+1] == '\n') {
+                    i++;
+                }
+                break;
+            }
+            header_value[t] = buffer[i];
+            t++;
+        }
+        printf("HEADER-NAME=<%s>, HEADER-VALUE=<%s>\n", header_name, header_value);
     }
 
     // @TODO: Validate resource
