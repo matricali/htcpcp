@@ -304,6 +304,11 @@ cleanup:
     close(socket_fd);
 }
 
+void usage(const char *p)
+{
+    printf("\nusage: %s [-h] [-v] [-p <port>]\n\n", p);
+}
+
 int main(int argc, char *argv[])
 {
     int port = 8888;
@@ -312,10 +317,31 @@ int main(int argc, char *argv[])
     int pid;
     pid_t children[MAX_CHILDS];
     int option = 1;
+    int opt;
 
     static struct sockaddr_in serv_addr;
     static struct sockaddr_in cli_addr;
     socklen_t len = 0;
+
+    while ((opt = getopt(argc, argv, "p:vh")) != -1) {
+        switch (opt) {
+            case 'p':
+                port = atoi(optarg);
+                break;
+            case 'v':
+                g_verbose = 1;
+                break;
+            case 'h':
+                usage(argv[0]);
+                printf("  -h                This help\n"
+                        "  -v                Verbose mode\n"
+                        "  -p <port>         Port number\n");
+                exit(EXIT_SUCCESS);
+            default:
+                usage(argv[0]);
+                exit(EXIT_FAILURE);
+        }
+    }
 
     /* Access log */
     log_file = fopen("access.log", "a");
