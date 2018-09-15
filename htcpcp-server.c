@@ -42,6 +42,21 @@ enum log_level {
     LOG_NEVER
 };
 
+/* Coffee Pot */
+typedef enum pot_status {
+    POT_STATUS_ERROR = 0,
+    POT_STATUS_READY = 1,
+    POT_STATUS_BREWING = 2
+} pot_status_t;
+
+typedef struct {
+    pot_status_t status;
+    int served;
+    time_t start_time;
+    time_t end_time;
+} pot_t;
+
+/* HTTP */
 typedef struct {
     char *field_name;
     char *field_value;
@@ -94,6 +109,27 @@ void access_log(const char *host, const char *ident, const char *authuser,
     }
 }
 
+/* Coffee pot */
+void pot_init(pot_t *pot)
+{
+    pot = malloc(sizeof *pot);
+    if (pot == NULL) {
+        logger(LOG_FATAL, "malloc\n");
+        exit(EXIT_FAILURE);
+    }
+    pot->status = POT_STATUS_ERROR;
+    pot->served = 0;
+    pot->start_time = 0;
+    pot->end_time = 0;
+}
+
+void pot_destroy(pot_t *pot)
+{
+    free(pot);
+    pot = NULL;
+}
+
+/* HTTP */
 void http_header_list_append(http_header_list_t *list, const char *name,
     const char *value)
 {
@@ -374,6 +410,7 @@ int main(int argc, char *argv[])
     pid_t children[MAX_CHILDS];
     int option = 1;
     int opt;
+    pot_t *POT = NULL;
 
     static struct sockaddr_in serv_addr;
     static struct sockaddr_in cli_addr;
@@ -406,6 +443,8 @@ int main(int argc, char *argv[])
     }
 
     logger(LOG_INFO, "Starting htcpcp-server on port %d...\n", port);
+
+    pot_init(POT);
 
     listenfd = socket(AF_INET, SOCK_STREAM, 0);
     if (listenfd < 0) {
@@ -467,6 +506,8 @@ int main(int argc, char *argv[])
     for (int i = 0; i < MAX_CHILDS; i++) {
         waitpid(children[i], NULL, 0);
     }
+
+    pot_destroy(POT);
 
     /* Access log */
     if (log_file != NULL) {
