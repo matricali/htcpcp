@@ -42,6 +42,11 @@ enum log_level {
     LOG_NEVER
 };
 
+typedef struct {
+    char *field_name;
+    char *field_value;
+} http_header_t;
+
 FILE *log_file = NULL;
 int g_verbose = 0;
 
@@ -144,6 +149,8 @@ void process_request(int socket_fd, const char *source)
     char request_method[100] = "";
     char request_path[2084] = "";
     char request_protocol[100] = "";
+    http_header_t **headers = NULL;
+    int headers_len = 0;
 
     /* Read buffer */
     ret = read(socket_fd, buffer, BUFSIZE);
@@ -254,6 +261,21 @@ void process_request(int socket_fd, const char *source)
             t++;
         }
         printf("HEADER-NAME=<%s>, HEADER-VALUE=<%s>\n", header_name, header_value);
+
+        ++headers_len;
+        if (headers == NULL) {
+            headers = malloc(headers_len * sizeof(*headers));
+        } else {
+            headers = realloc(headers, headers_len * sizeof(*headers));
+        }
+
+        headers[headers_len-1] = malloc(sizeof *headers[headers_len-1]);
+
+        headers[headers_len-1]->field_name = malloc(strlen(header_name)+1);
+        strcpy(headers[headers_len-1]->field_name, header_name);
+
+        headers[headers_len-1]->field_value = malloc(strlen(header_value)+1);
+        strcpy(headers[headers_len-1]->field_value, header_value);
     }
 
     // @TODO: Validate resource
@@ -302,6 +324,15 @@ cleanup:
     logger(LOG_DEBUG, "Closing connection.\n");
     shutdown(socket_fd, SHUT_RDWR);
     close(socket_fd);
+
+    if (headers != NULL) {
+        for (int p = 0; p < headers_len; p++) {
+            free(headers[p]->field_name);
+            free(headers[p]->field_value);
+            free(headers[p]);
+        }
+        free(headers);
+    }
 }
 
 void usage(const char *p)
