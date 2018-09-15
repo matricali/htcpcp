@@ -69,6 +69,7 @@ typedef struct {
 
 FILE *log_file = NULL;
 int g_verbose = 0;
+pot_t POT = {0};
 
 void logger(enum log_level level, const char *format, ...) {
     if (level == LOG_NEVER || level == LOG_NONE) {
@@ -112,15 +113,33 @@ void access_log(const char *host, const char *ident, const char *authuser,
 /* Coffee pot */
 void pot_init(pot_t *pot)
 {
-    pot = malloc(sizeof *pot);
-    if (pot == NULL) {
-        logger(LOG_FATAL, "malloc\n");
-        exit(EXIT_FAILURE);
-    }
-    pot->status = POT_STATUS_ERROR;
+    pot->status = POT_STATUS_READY;
     pot->served = 0;
     pot->start_time = 0;
     pot->end_time = 0;
+}
+
+void pot_refresh(pot_t *pot)
+{
+    time_t cur_time = time(NULL);
+
+    if (pot->status == POT_STATUS_BREWING) {
+        if (cur_time > pot->end_time) {
+            pot->status = POT_STATUS_READY;
+            ++pot->served;
+        }
+    }
+}
+
+void pot_brew(pot_t *pot)
+{
+    if (pot->status != POT_STATUS_READY) {
+        logger(LOG_DEBUG, "POT isnt READY\n");
+        return;
+    }
+    pot->start_time = time(NULL);
+    pot->end_time = pot->start_time + 30;
+    pot->status = POT_STATUS_BREWING;
 }
 
 void pot_destroy(pot_t *pot)
@@ -356,6 +375,16 @@ void process_request(int socket_fd, const char *source)
         // @TODO: Parse "Accept-Additions" headers
         // @TODO: 406 Not Acceptable
         // @TODO: Parse body. coffee-message-body = "start" | "stop"
+        pot_refresh(&POT);
+
+        if (POT.status == POT_STATUS_BREWING) {
+            status_code = 510;
+            build_response(buffer, status_code, NULL, "Pot busy\n");
+            goto send;
+        }
+
+        pot_brew(&POT);
+
         status_code = 200;
         build_response(buffer, status_code, NULL, NULL);
         goto send;
@@ -368,9 +397,18 @@ void process_request(int socket_fd, const char *source)
     }
 
     if (strncmp("PROPFIND", request_method, 9) == 0) {
+        pot_refresh(&POT);
+
+        if (POT.status != POT_STATUS_READY) {
+            status_code = 510;
+            build_response(buffer, status_code, "Content-Type: message/coffepot\n",
+                "Pot busy\n");
+            goto send;
+        }
+
         status_code = 200;
         build_response(buffer, status_code, "Content-Type: message/coffepot\n",
-            "Pot ready to brew");
+            "Pot ready to brew\n");
         goto send;
     }
 
@@ -410,7 +448,6 @@ int main(int argc, char *argv[])
     pid_t children[MAX_CHILDS];
     int option = 1;
     int opt;
-    pot_t *POT = NULL;
 
     static struct sockaddr_in serv_addr;
     static struct sockaddr_in cli_addr;
@@ -444,7 +481,7 @@ int main(int argc, char *argv[])
 
     logger(LOG_INFO, "Starting htcpcp-server on port %d...\n", port);
 
-    pot_init(POT);
+    pot_init(&POT);
 
     listenfd = socket(AF_INET, SOCK_STREAM, 0);
     if (listenfd < 0) {
@@ -507,7 +544,7 @@ int main(int argc, char *argv[])
         waitpid(children[i], NULL, 0);
     }
 
-    pot_destroy(POT);
+    pot_destroy(&POT);
 
     /* Access log */
     if (log_file != NULL) {
