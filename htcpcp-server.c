@@ -156,9 +156,7 @@ void process_request(int socket_fd, const char *source)
     ret = read(socket_fd, buffer, BUFSIZE);
 
     if (ret == 0 || ret == -1) {
-        status_code = 400;
-        build_response(buffer, status_code, NULL, NULL);
-        goto send;
+        goto cleanup;
     }
 
     if (ret > 0 && ret < BUFSIZE) {
@@ -260,7 +258,6 @@ void process_request(int socket_fd, const char *source)
             header_value[t] = buffer[i];
             t++;
         }
-        printf("HEADER-NAME=<%s>, HEADER-VALUE=<%s>\n", header_name, header_value);
 
         ++headers_len;
         if (headers == NULL) {
