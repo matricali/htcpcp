@@ -47,6 +47,11 @@ typedef struct {
     char *field_value;
 } http_header_t;
 
+typedef struct {
+    http_header_t **headers;
+    int length;
+} http_header_list_t;
+
 FILE *log_file = NULL;
 int g_verbose = 0;
 
@@ -87,6 +92,27 @@ void access_log(const char *host, const char *ident, const char *authuser,
             request_protocol, status, bytes);
         fflush(log_file);
     }
+}
+
+void http_header_list_append(http_header_list_t *list, const char *name,
+    const char *value)
+{
+    if (list->headers == NULL) {
+        list->headers = malloc((list->length+1) * sizeof(*list->headers));
+    } else {
+        list->headers = realloc(list->headers,
+            (list->length+1) * sizeof(*list->headers));
+    }
+
+    list->headers[list->length] = malloc(sizeof *list->headers[list->length]);
+
+    list->headers[list->length]->field_name = malloc(strlen(name)+1);
+    strcpy(list->headers[list->length]->field_name, name);
+
+    list->headers[list->length]->field_value = malloc(strlen(value)+1);
+    strcpy(list->headers[list->length]->field_value, value);
+
+    list->length++;
 }
 
 int build_response(char *buffer, int status, const char *headers,
@@ -149,8 +175,7 @@ void process_request(int socket_fd, const char *source)
     char request_method[100] = "";
     char request_path[2084] = "";
     char request_protocol[100] = "";
-    http_header_t **headers = NULL;
-    int headers_len = 0;
+    http_header_list_t *headers = NULL;
 
     /* Read buffer */
     ret = read(socket_fd, buffer, BUFSIZE);
@@ -216,6 +241,9 @@ void process_request(int socket_fd, const char *source)
     /* 4.2 Message Headers */
     char header_name[2048] = {0};
     char header_value[2048] = {0};
+    headers = malloc(sizeof *headers);
+    headers->length = 0;
+    headers->headers = NULL;
 
     while (i++ < ret - 1) {
         if (buffer[i] == '\r' && buffer[i+1] == '\n') {
@@ -259,20 +287,7 @@ void process_request(int socket_fd, const char *source)
             t++;
         }
 
-        ++headers_len;
-        if (headers == NULL) {
-            headers = malloc(headers_len * sizeof(*headers));
-        } else {
-            headers = realloc(headers, headers_len * sizeof(*headers));
-        }
-
-        headers[headers_len-1] = malloc(sizeof *headers[headers_len-1]);
-
-        headers[headers_len-1]->field_name = malloc(strlen(header_name)+1);
-        strcpy(headers[headers_len-1]->field_name, header_name);
-
-        headers[headers_len-1]->field_value = malloc(strlen(header_value)+1);
-        strcpy(headers[headers_len-1]->field_value, header_value);
+        http_header_list_append(headers, header_value, header_name);
     }
 
     // @TODO: Validate resource
@@ -323,10 +338,13 @@ cleanup:
     close(socket_fd);
 
     if (headers != NULL) {
-        for (int p = 0; p < headers_len; p++) {
-            free(headers[p]->field_name);
-            free(headers[p]->field_value);
-            free(headers[p]);
+        if (headers->headers != NULL) {
+            for (int p = 0; p < headers->length; p++) {
+                free(headers->headers[p]->field_name);
+                free(headers->headers[p]->field_value);
+                free(headers->headers[p]);
+            }
+            free(headers->headers);
         }
         free(headers);
     }
