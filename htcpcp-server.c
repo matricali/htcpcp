@@ -104,15 +104,16 @@ void http_header_list_append(http_header_list_t *list, const char *name,
             (list->length+1) * sizeof(*list->headers));
     }
 
-    list->headers[list->length] = malloc(sizeof *list->headers[list->length]);
+    http_header_t *header = malloc(sizeof *header);
 
-    list->headers[list->length]->field_name = malloc(strlen(name)+1);
-    strcpy(list->headers[list->length]->field_name, name);
+    header->field_name = malloc(strlen(name)+1);
+    strcpy(header->field_name, name);
 
-    list->headers[list->length]->field_value = malloc(strlen(value)+1);
-    strcpy(list->headers[list->length]->field_value, value);
+    header->field_value = malloc(strlen(value)+1);
+    strcpy(header->field_value, value);
 
-    list->length++;
+    list->headers[list->length] = header;
+    ++list->length;
 }
 
 void http_header_list_destroy(http_header_list_t *list)
@@ -120,13 +121,18 @@ void http_header_list_destroy(http_header_list_t *list)
     if (list != NULL) {
         if (list->headers != NULL) {
             for (int p = 0; p < list->length; p++) {
-                free(list->headers[p]->field_name);
-                free(list->headers[p]->field_value);
-                free(list->headers[p]);
+                if (list->headers[p] != NULL) {
+                    free(list->headers[p]->field_name);
+                    free(list->headers[p]->field_value);
+                    free(list->headers[p]);
+                    list->headers[p] = NULL;
+                }
             }
             free(list->headers);
+            list->headers = NULL;
         }
         free(list);
+        list = NULL;
     }
 }
 
