@@ -115,6 +115,21 @@ void http_header_list_append(http_header_list_t *list, const char *name,
     list->length++;
 }
 
+void http_header_list_destroy(http_header_list_t *list)
+{
+    if (list != NULL) {
+        if (list->headers != NULL) {
+            for (int p = 0; p < list->length; p++) {
+                free(list->headers[p]->field_name);
+                free(list->headers[p]->field_value);
+                free(list->headers[p]);
+            }
+            free(list->headers);
+        }
+        free(list);
+    }
+}
+
 int build_response(char *buffer, int status, const char *headers,
     const char *body)
 {
@@ -336,18 +351,7 @@ cleanup:
     logger(LOG_DEBUG, "Closing connection.\n");
     shutdown(socket_fd, SHUT_RDWR);
     close(socket_fd);
-
-    if (headers != NULL) {
-        if (headers->headers != NULL) {
-            for (int p = 0; p < headers->length; p++) {
-                free(headers->headers[p]->field_name);
-                free(headers->headers[p]->field_value);
-                free(headers->headers[p]);
-            }
-            free(headers->headers);
-        }
-        free(headers);
-    }
+    http_header_list_destroy(headers);
 }
 
 void usage(const char *p)
