@@ -275,6 +275,7 @@ void process_request(int socket_fd, const char *source)
     char request_path[2084] = "";
     char request_protocol[100] = "";
     http_header_list_t *headers = NULL;
+    char request_body[2084] = "";
 
     /* Read buffer */
     ret = read(socket_fd, buffer, BUFSIZE);
@@ -298,7 +299,7 @@ void process_request(int socket_fd, const char *source)
     int t;
 
     /* 5.1.1 Method */
-    for (i = 0; i < ret; i++) {
+    for (i = 0; i < ret; ++i) {
         if (buffer[i] == 0 || buffer[i] == ' ') {
             request_method[i] = 0;
             break;
@@ -306,7 +307,7 @@ void process_request(int socket_fd, const char *source)
         request_method[i] = buffer[i];
     }
     /* 5.1.2 Request-URI */
-    for (t = 0, i++; i < ret; i++) {
+    for (t = 0, ++i; i < ret; ++i) {
         if (buffer[i] == 0 || buffer[i] == ' ') {
             request_path[t] = 0;
             break;
@@ -320,11 +321,11 @@ void process_request(int socket_fd, const char *source)
         t++;
     }
     /* Request protocol version */
-    for (t = 0, i++; i < ret - 1; i++) {
+    for (t = 0; ++i < ret;) {
         if (buffer[i] == 0 || buffer[i] == ' '
         || (buffer[i] == '\r' && buffer[i+1] == '\n')) {
             request_protocol[t] = 0;
-            i++;
+            ++i;
             break;
         }
         request_protocol[t] = buffer[i];
@@ -346,11 +347,12 @@ void process_request(int socket_fd, const char *source)
 
     while (i++ < ret - 1) {
         if (buffer[i] == '\r' && buffer[i+1] == '\n') {
+            ++i;
             break;
         }
         /* Nombre */
         char f = 0;
-        for (t = 0; i < ret - 1; i++) {
+        for (t = 0; i < ret; ++i) {
             if (f == 0 && buffer[i] == ' ') {
                 continue;
             }
@@ -361,7 +363,7 @@ void process_request(int socket_fd, const char *source)
             }
             if (buffer[i] == '\r' && buffer[i+1] == '\n') {
                 header_name[t] = 0;
-                i++;
+                ++i;
                 break;
             }
             header_name[t] = buffer[i];
@@ -369,7 +371,7 @@ void process_request(int socket_fd, const char *source)
         }
         /* Valor */
         f = 0;
-        for (t = 0, i++; i < ret - 1; i++) {
+        for (t = 0; ++i < ret;) {
             if (f == 0 && buffer[i] == ' ') {
                 continue;
             }
@@ -378,7 +380,7 @@ void process_request(int socket_fd, const char *source)
             || (buffer[i] == '\r' && buffer[i+1] == '\n')) {
                 header_value[t] = 0;
                 if (buffer[i] == '\r' && buffer[i+1] == '\n') {
-                    i++;
+                    ++i;
                 }
                 break;
             }
@@ -389,6 +391,30 @@ void process_request(int socket_fd, const char *source)
         http_header_list_append(headers, header_name, header_value);
     }
 
+    /* 14.13 Content-Length */
+    int content_length = 0;
+    const char *content_length_str = http_header_list_find(headers,
+        "Content-Length");
+
+    if (content_length_str != NULL) {
+        content_length = atoi(content_length_str);
+    }
+
+    if (content_length < 0) {
+        /* 10.4.1 400 Bad Request */
+        status_code = 400;
+        build_response(buffer, status_code, NULL, NULL);
+        goto send;
+    }
+
+    /* 4.3 Message Body */
+    int b = 0;
+    for (; b < content_length && (++i < ret); ++b) {
+        request_body[b] = buffer[i];
+    }
+    request_body[b] = 0;
+
+
     // @TODO: Validate resource
 
     if (strncmp("BREW", request_method, 5) == 0
@@ -396,11 +422,11 @@ void process_request(int socket_fd, const char *source)
         // @TODO: Add response header "Safe: no"
         // @TODO: Parse "Accept-Additions" headers
         // @TODO: 406 Not Acceptable
-        // @TODO: Parse body. coffee-message-body = "start" | "stop"
-        char *content_type = http_header_list_find(headers, "Content-Type");
+        const char *content_type = http_header_list_find(headers, "Content-Type");
 
         if (content_type == NULL ||
             strcasecmp(content_type, "application/coffee-pot-command") != 0) {
+            /* 10.4.16 415 Unsupported Media Type */
             status_code = 415;
             build_response(buffer, status_code, NULL, NULL);
             goto send;
@@ -408,15 +434,26 @@ void process_request(int socket_fd, const char *source)
 
         pot_refresh(POT);
 
-        if (POT->status == POT_STATUS_BREWING) {
-            status_code = 510;
-            build_response(buffer, status_code, NULL, "Pot busy\n");
+        if (strcmp(request_body, "start") == 0) {
+            if (POT->status == POT_STATUS_BREWING) {
+                status_code = 510;
+                build_response(buffer, status_code, NULL, "Pot busy\n");
+                goto send;
+            }
+
+            pot_brew(POT);
+
+            status_code = 200;
+            build_response(buffer, status_code, NULL, NULL);
             goto send;
         }
 
-        pot_brew(POT);
+        if (strcmp(request_body, "stop") == 0) {
+            /* It is not yet implemented :D */
+        }
 
-        status_code = 200;
+        /* I'm not sure what return code should we use in this case */
+        status_code = 415;
         build_response(buffer, status_code, NULL, NULL);
         goto send;
     }
@@ -552,7 +589,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    for (int i = 0; i < MAX_CHILDS; i++) {
+    for (int i = 0; i < MAX_CHILDS; ++i) {
         pid = fork();
 
         if (pid < 0) {
@@ -586,7 +623,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    for (int i = 0; i < MAX_CHILDS; i++) {
+    for (int i = 0; i < MAX_CHILDS; ++i) {
         waitpid(children[i], NULL, 0);
     }
 
