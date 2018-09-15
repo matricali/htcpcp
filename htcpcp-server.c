@@ -21,10 +21,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <stdarg.h> /* va_list, va_start, va_end */
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <sys/mman.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 
 #define BUFSIZE 8096
 #define MAX_CHILDS 10
@@ -54,6 +56,7 @@ typedef struct {
     int served;
     time_t start_time;
     time_t end_time;
+    pthread_mutex_t mutex;
 } pot_t;
 
 /* HTTP */
@@ -69,7 +72,7 @@ typedef struct {
 
 FILE *log_file = NULL;
 int g_verbose = 0;
-pot_t POT = {0};
+static pot_t *POT = NULL;
 
 void logger(enum log_level level, const char *format, ...) {
     if (level == LOG_NEVER || level == LOG_NONE) {
@@ -121,25 +124,29 @@ void pot_init(pot_t *pot)
 
 void pot_refresh(pot_t *pot)
 {
-    time_t cur_time = time(NULL);
-
+    pthread_mutex_lock(&pot->mutex);
     if (pot->status == POT_STATUS_BREWING) {
+        time_t cur_time = time(NULL);
         if (cur_time > pot->end_time) {
             pot->status = POT_STATUS_READY;
             ++pot->served;
         }
     }
+    pthread_mutex_unlock(&pot->mutex);
 }
 
 void pot_brew(pot_t *pot)
 {
+    pthread_mutex_lock(&pot->mutex);
     if (pot->status != POT_STATUS_READY) {
+        pthread_mutex_unlock(&pot->mutex);
         logger(LOG_DEBUG, "POT isnt READY\n");
         return;
     }
     pot->start_time = time(NULL);
     pot->end_time = pot->start_time + 30;
     pot->status = POT_STATUS_BREWING;
+    pthread_mutex_unlock(&pot->mutex);
 }
 
 void pot_destroy(pot_t *pot)
@@ -375,15 +382,15 @@ void process_request(int socket_fd, const char *source)
         // @TODO: Parse "Accept-Additions" headers
         // @TODO: 406 Not Acceptable
         // @TODO: Parse body. coffee-message-body = "start" | "stop"
-        pot_refresh(&POT);
+        pot_refresh(POT);
 
-        if (POT.status == POT_STATUS_BREWING) {
+        if (POT->status == POT_STATUS_BREWING) {
             status_code = 510;
             build_response(buffer, status_code, NULL, "Pot busy\n");
             goto send;
         }
 
-        pot_brew(&POT);
+        pot_brew(POT);
 
         status_code = 200;
         build_response(buffer, status_code, NULL, NULL);
@@ -397,9 +404,9 @@ void process_request(int socket_fd, const char *source)
     }
 
     if (strncmp("PROPFIND", request_method, 9) == 0) {
-        pot_refresh(&POT);
+        pot_refresh(POT);
 
-        if (POT.status != POT_STATUS_READY) {
+        if (POT->status != POT_STATUS_READY) {
             status_code = 510;
             build_response(buffer, status_code, "Content-Type: message/coffepot\n",
                 "Pot busy\n");
@@ -481,7 +488,22 @@ int main(int argc, char *argv[])
 
     logger(LOG_INFO, "Starting htcpcp-server on port %d...\n", port);
 
-    pot_init(&POT);
+    /* Place POT in shared memory */
+    int prot = PROT_READ | PROT_WRITE;
+    int flags = MAP_SHARED | MAP_ANONYMOUS;
+    POT = mmap(NULL, sizeof(pot_t), prot, flags, -1, 0);
+    if (POT == MAP_FAILED) {
+        logger(LOG_FATAL, "Cannot allocate shared memory.\n");
+        exit(EXIT_FAILURE)
+    }
+
+    pot_init(POT);
+
+    /* Initialise mutex so it works properly in shared memory */
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+    pthread_mutex_init(&POT->mutex, &attr);
 
     listenfd = socket(AF_INET, SOCK_STREAM, 0);
     if (listenfd < 0) {
@@ -544,7 +566,7 @@ int main(int argc, char *argv[])
         waitpid(children[i], NULL, 0);
     }
 
-    pot_destroy(&POT);
+    pot_destroy(POT);
 
     /* Access log */
     if (log_file != NULL) {
