@@ -178,6 +178,19 @@ void http_header_list_append(http_header_list_t *list, const char *name,
     ++list->length;
 }
 
+const char *http_header_list_find(http_header_list_t *list, const char *name)
+{
+    if (list == NULL) {
+        return NULL;
+    }
+    for (int i = 0; i < list->length; ++i) {
+        if (strcasecmp(list->headers[i]->field_name, name) == 0) {
+            return list->headers[i]->field_value;
+        }
+    }
+    return NULL;
+}
+
 void http_header_list_destroy(http_header_list_t *list)
 {
     if (list != NULL) {
@@ -215,6 +228,9 @@ int build_response(char *buffer, int status, const char *headers,
     }
     if (status == 406) {
         strncpy(status_line, "Not Acceptable", 50);
+    }
+    if (status == 415) {
+        strncpy(status_line, "Unsupported Media Type", 50);
     }
     if (status == 418) {
         strncpy(status_line, "I'm a teapot", 50);
@@ -370,18 +386,26 @@ void process_request(int socket_fd, const char *source)
             t++;
         }
 
-        http_header_list_append(headers, header_value, header_name);
+        http_header_list_append(headers, header_name, header_value);
     }
 
     // @TODO: Validate resource
 
     if (strncmp("BREW", request_method, 5) == 0
         || strncmp("POST", request_method, 5) == 0) {
-        // @TODO: Content-Type MUST be "application/coffee-pot-command"
         // @TODO: Add response header "Safe: no"
         // @TODO: Parse "Accept-Additions" headers
         // @TODO: 406 Not Acceptable
         // @TODO: Parse body. coffee-message-body = "start" | "stop"
+        char *content_type = http_header_list_find(headers, "Content-Type");
+
+        if (content_type == NULL ||
+            strcasecmp(content_type, "application/coffee-pot-command") != 0) {
+            status_code = 415;
+            build_response(buffer, status_code, NULL, NULL);
+            goto send;
+        }
+
         pot_refresh(POT);
 
         if (POT->status == POT_STATUS_BREWING) {
@@ -494,7 +518,7 @@ int main(int argc, char *argv[])
     POT = mmap(NULL, sizeof(pot_t), prot, flags, -1, 0);
     if (POT == MAP_FAILED) {
         logger(LOG_FATAL, "Cannot allocate shared memory.\n");
-        exit(EXIT_FAILURE)
+        exit(EXIT_FAILURE);
     }
 
     pot_init(POT);
