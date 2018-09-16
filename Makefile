@@ -4,7 +4,7 @@ CFLAGS	+= -Wall -g -std=gnu99 -O3
 LDFLAGS	+=
 
 NAME	= htcpcp-server
-SRCS	= htcpcp-server.c
+SRCS	= $(shell find . -name "**.c")
 OBJS	= $(SRCS:.c=.o)
 
 all: $(NAME)
