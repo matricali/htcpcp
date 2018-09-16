@@ -81,9 +81,10 @@ http_response_t RESPONSE_OK = {200, "OK", NULL, NULL};
 http_response_t RESPONSE_BAD_REQUEST = {400, "Bad Request", NULL, NULL};
 http_response_t RESPONSE_POT_BUSY = {510, "Pot Busy", "Content-Type: message/coffepot\n", "Pot busy"};
 http_response_t RESPONSE_POT_READY = {200, "OK", "Content-Type: message/coffepot\n", "Pot ready to brew"};
+http_response_t RESPONSE_POT_NOT_FOUND = {404, "Pot Not Found", NULL, NULL};
 http_response_t RESPONSE_URI_TOO_LONG = {414, "Request-URI Too Long", NULL, NULL};
 http_response_t RESPONSE_UNSUPPORTED_MEDIA_TYPE = {415, "Unsupported Media Type", NULL, NULL};
-http_response_t RESPONSE_I_AM_A_TEAPOT = {418, "Unsupported Media Type", NULL, NULL};
+http_response_t RESPONSE_I_AM_A_TEAPOT = {418, "I'm a teapot", "Content-Type: text/plain\n", "I'm a teapot"};
 http_response_t RESPONSE_VERSION_NOT_SUPPORTED = {505, "HTTP Version Not Supported", NULL, NULL};
 
 FILE *log_file = NULL;
@@ -325,6 +326,11 @@ void process_request(int socket_fd, const char *source)
     if (strncmp(PROTOCOL, request_protocol, 1+strlen(PROTOCOL)) != 0) {
         /* Unsupported protocol */
         status_code = http_build_response(buffer, RESPONSE_VERSION_NOT_SUPPORTED);
+        goto send;
+    }
+    if (strncmp("/pot-1", request_path, 1+strlen("/pot-1")) != 0) {
+        /* Not Found */
+        status_code = http_build_response(buffer, RESPONSE_POT_NOT_FOUND);
         goto send;
     }
 
