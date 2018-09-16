@@ -71,7 +71,16 @@ typedef struct {
 } http_header_list_t;
 
 typedef struct {
-    const int code;
+    char method[100];
+    char path[2084];
+    char protocol[100];
+    http_header_list_t *headers;
+    int content_length;
+    char body[2084];
+} http_request_t;
+
+typedef struct {
+    int code;
     const char *message;
     const char *headers;
     const char *body;
@@ -236,7 +245,7 @@ int http_build_response(char *buffer, http_response_t response)
         len = strlen(response.body);
     }
 
-    sprintf(
+    return sprintf(
         buffer,
         "%s %d %s\n%sServer: %s\nContent-Length: %d\nConnection: close\n\n%s",
         PROTOCOL,
@@ -247,15 +256,12 @@ int http_build_response(char *buffer, http_response_t response)
         len,
         (response.body != NULL ? response.body : "")
     );
-
-    return response.code;
 }
 
 void process_request(int socket_fd, const char *source)
 {
     long ret;
     static char buffer[BUFSIZE + 1];
-    int status_code = 200;
     time_t timer;
     struct tm* tm_info;
 
@@ -264,11 +270,8 @@ void process_request(int socket_fd, const char *source)
     tm_info = localtime(&timer);
 
     /* Parsear cabeceras */
-    char request_method[100] = "";
-    char request_path[2084] = "";
-    char request_protocol[100] = "";
-    http_header_list_t *headers = NULL;
-    char request_body[2084] = "";
+    http_request_t request = {{0}};
+    http_response_t response = {0};
 
     /* Read buffer */
     ret = read(socket_fd, buffer, BUFSIZE);
@@ -294,52 +297,52 @@ void process_request(int socket_fd, const char *source)
     /* 5.1.1 Method */
     for (i = 0; i < ret; ++i) {
         if (buffer[i] == 0 || buffer[i] == ' ') {
-            request_method[i] = 0;
+            request.method[i] = 0;
             break;
         }
-        request_method[i] = buffer[i];
+        request.method[i] = buffer[i];
     }
     /* 5.1.2 Request-URI */
     for (t = 0, ++i; i < ret; ++i) {
         if (buffer[i] == 0 || buffer[i] == ' ') {
-            request_path[t] = 0;
+            request.path[t] = 0;
             break;
         }
         if (t >= 2083) {
-            status_code = http_build_response(buffer, RESPONSE_URI_TOO_LONG);
+            response = RESPONSE_URI_TOO_LONG;
             goto send;
         }
-        request_path[t] = buffer[i];
+        request.path[t] = buffer[i];
         t++;
     }
     /* Request protocol version */
     for (t = 0; ++i < ret;) {
         if (buffer[i] == 0 || buffer[i] == ' '
         || (buffer[i] == '\r' && buffer[i+1] == '\n')) {
-            request_protocol[t] = 0;
+            request.protocol[t] = 0;
             ++i;
             break;
         }
-        request_protocol[t] = buffer[i];
+        request.protocol[t] = buffer[i];
         t++;
     }
-    if (strncmp(PROTOCOL, request_protocol, 1+strlen(PROTOCOL)) != 0) {
+    if (strncmp(PROTOCOL, request.protocol, 1+strlen(PROTOCOL)) != 0) {
         /* Unsupported protocol */
-        status_code = http_build_response(buffer, RESPONSE_VERSION_NOT_SUPPORTED);
+        response = RESPONSE_VERSION_NOT_SUPPORTED;
         goto send;
     }
-    if (strncmp("/pot-1", request_path, 1+strlen("/pot-1")) != 0) {
+    if (strncmp("/pot-1", request.path, 1+strlen("/pot-1")) != 0) {
         /* Not Found */
-        status_code = http_build_response(buffer, RESPONSE_POT_NOT_FOUND);
+        response = RESPONSE_POT_NOT_FOUND;
         goto send;
     }
 
     /* 4.2 Message Headers */
     char header_name[2048] = {0};
     char header_value[2048] = {0};
-    headers = malloc(sizeof *headers);
-    headers->length = 0;
-    headers->headers = NULL;
+    request.headers = malloc(sizeof *request.headers);
+    request.headers->length = 0;
+    request.headers->headers = NULL;
 
     while (i++ < ret - 1) {
         if (buffer[i] == '\r' && buffer[i+1] == '\n') {
@@ -384,12 +387,12 @@ void process_request(int socket_fd, const char *source)
             t++;
         }
 
-        http_header_list_append(headers, header_name, header_value);
+        http_header_list_append(request.headers, header_name, header_value);
     }
 
     /* 14.13 Content-Length */
     int content_length = 0;
-    const char *content_length_str = http_header_list_find(headers,
+    const char *content_length_str = http_header_list_find(request.headers,
         "Content-Length");
 
     if (content_length_str != NULL) {
@@ -398,98 +401,96 @@ void process_request(int socket_fd, const char *source)
 
     if (content_length < 0) {
         /* 10.4.1 400 Bad Request */
-        status_code = http_build_response(buffer, RESPONSE_BAD_REQUEST);
+        response = RESPONSE_BAD_REQUEST;
         goto send;
     }
 
     /* 4.3 Message Body */
     int b = 0;
     for (; b < content_length && (++i < ret); ++b) {
-        request_body[b] = buffer[i];
+        request.body[b] = buffer[i];
     }
-    request_body[b] = 0;
+    request.body[b] = 0;
 
 
     // @TODO: Validate resource
 
-    if (strncmp("BREW", request_method, 5) == 0
-        || strncmp("POST", request_method, 5) == 0) {
+    if (strncmp("BREW", request.method, 5) == 0
+        || strncmp("POST", request.method, 5) == 0) {
         // @TODO: Add response header "Safe: no"
         // @TODO: Parse "Accept-Additions" headers
         // @TODO: 406 Not Acceptable
-        const char *content_type = http_header_list_find(headers, "Content-Type");
+        const char *content_type = http_header_list_find(request.headers, "Content-Type");
 
         if (content_type == NULL ||
             strcasecmp(content_type, "application/coffee-pot-command") != 0) {
             /* 10.4.16 415 Unsupported Media Type */
-            status_code = http_build_response(buffer, RESPONSE_UNSUPPORTED_MEDIA_TYPE);
+            response = RESPONSE_UNSUPPORTED_MEDIA_TYPE;
             goto send;
         }
 
         pot_refresh(POT);
 
-        if (strcmp(request_body, "start") == 0) {
+        if (strcmp(request.body, "start") == 0) {
             if (POT->status == POT_STATUS_BREWING) {
-                status_code = http_build_response(buffer, RESPONSE_POT_BUSY);
+                response = RESPONSE_POT_BUSY;
                 goto send;
             }
 
             pot_brew(POT);
 
-            status_code = http_build_response(buffer, RESPONSE_OK);
+            response = RESPONSE_OK;
             goto send;
         }
 
-        if (strcmp(request_body, "stop") == 0) {
+        if (strcmp(request.body, "stop") == 0) {
             /* It is not yet implemented :D */
         }
 
         /* I'm not sure what return code should we use in this case */
-        status_code = http_build_response(buffer, RESPONSE_UNSUPPORTED_MEDIA_TYPE);
+        response = RESPONSE_BAD_REQUEST;
         goto send;
     }
 
-    if (strncmp("GET", request_method, 4) == 0) {
-        status_code = http_build_response(buffer, RESPONSE_OK);
+    if (strncmp("GET", request.method, 4) == 0) {
+        response = RESPONSE_OK;
         goto send;
     }
 
-    if (strncmp("PROPFIND", request_method, 9) == 0) {
+    if (strncmp("PROPFIND", request.method, 9) == 0) {
         pot_refresh(POT);
 
         if (POT->status != POT_STATUS_READY) {
-            status_code = http_build_response(buffer, RESPONSE_POT_BUSY);
+            response = RESPONSE_POT_BUSY;
             goto send;
         }
 
-        status_code = http_build_response(buffer, RESPONSE_POT_READY);
+        response = RESPONSE_POT_READY;
         goto send;
     }
 
-    if (strncmp("WHEN", request_method, 5) == 0) {
-        http_response_t response = {
-            .code = 406,
-            .message = "Not Acceptable",
-            .headers = "Additions-List: MILK\n",
-            .body = NULL
-        };
-        status_code = http_build_response(buffer, response);
+    if (strncmp("WHEN", request.method, 5) == 0) {
+        response.code = 406;
+        response.message = "Not Acceptable";
+        response.headers = "Additions-List: MILK\n";
+        response.body = NULL;
         goto send;
     }
 
     /* I'm a teapot :D */
-    status_code = http_build_response(buffer, RESPONSE_I_AM_A_TEAPOT);
+    response = RESPONSE_I_AM_A_TEAPOT;
 
 send:
+    http_build_response(buffer, response);
     write(socket_fd, buffer, strlen(buffer));
-    access_log(source, "-", "-", tm_info, request_method, request_path,
-        request_protocol, status_code, strlen(buffer));
+    access_log(source, "-", "-", tm_info, request.method, request.path,
+        request.protocol, response.code, strlen(buffer));
 
 cleanup:
     logger(LOG_DEBUG, "Closing connection.\n");
     shutdown(socket_fd, SHUT_RDWR);
     close(socket_fd);
-    http_header_list_destroy(headers);
+    http_header_list_destroy(request.headers);
 }
 
 void usage(const char *p)
