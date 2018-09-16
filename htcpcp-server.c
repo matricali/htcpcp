@@ -258,7 +258,8 @@ int http_build_response(char *buffer, http_response_t response)
     );
 }
 
-http_response_t htcpcp_handle_brew(http_request_t request) {
+http_response_t htcpcp_handle_brew(http_request_t request)
+{
     // @TODO: Add response header "Safe: no"
     // @TODO: Parse "Accept-Additions" headers
     // @TODO: 406 Not Acceptable
@@ -288,6 +289,32 @@ http_response_t htcpcp_handle_brew(http_request_t request) {
 
     /* I'm not sure what return code should we use in this case */
     return RESPONSE_BAD_REQUEST;
+}
+
+http_response_t htcpcp_handle_get(http_request_t request)
+{
+    return RESPONSE_OK;
+}
+
+http_response_t htcpcp_handle_propfind(http_request_t request)
+{
+    pot_refresh(POT);
+
+    if (POT->status != POT_STATUS_READY) {
+        return RESPONSE_POT_BUSY;
+    }
+
+    return RESPONSE_POT_READY;
+}
+
+http_response_t htcpcp_handle_when(http_request_t request)
+{
+    return (http_response_t) {
+        .code = 406,
+        .message = "Not Acceptable",
+        .headers = "Additions-List: MILK\n",
+        .body = NULL
+    };
 }
 
 void process_request(int socket_fd, const char *source)
@@ -462,27 +489,17 @@ void process_request(int socket_fd, const char *source)
     }
 
     if (strncmp("GET", request.method, 4) == 0) {
-        response = RESPONSE_OK;
+        response = htcpcp_handle_get(request);
         goto send;
     }
 
     if (strncmp("PROPFIND", request.method, 9) == 0) {
-        pot_refresh(POT);
-
-        if (POT->status != POT_STATUS_READY) {
-            response = RESPONSE_POT_BUSY;
-            goto send;
-        }
-
-        response = RESPONSE_POT_READY;
+        response = htcpcp_handle_propfind(request);
         goto send;
     }
 
     if (strncmp("WHEN", request.method, 5) == 0) {
-        response.code = 406;
-        response.message = "Not Acceptable";
-        response.headers = "Additions-List: MILK\n";
-        response.body = NULL;
+        response = htcpcp_handle_when(request);
         goto send;
     }
 
