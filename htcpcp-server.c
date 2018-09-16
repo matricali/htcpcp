@@ -317,41 +317,55 @@ http_response_t htcpcp_handle_when(http_request_t request)
     };
 }
 
-void process_request(int socket_fd, const char *source)
+http_response_t htcpcp_request_handle(http_request_t request)
 {
-    long len;
-    static char buffer[BUFSIZE + 1];
-    time_t timer;
-    struct tm* tm_info;
-
-    /* Request time */
-    time(&timer);
-    tm_info = localtime(&timer);
-
-    /* Parsear cabeceras */
-    http_request_t request = {{0}};
-    http_response_t response = {0};
-
-    /* Read buffer */
-    len = read(socket_fd, buffer, BUFSIZE);
-
-    if (len == 0 || len == -1) {
-        goto cleanup;
+    if (strncmp(PROTOCOL, request.protocol, 1+strlen(PROTOCOL)) != 0) {
+        /* Unsupported protocol */
+        return RESPONSE_VERSION_NOT_SUPPORTED;
     }
 
-    if (len > 0 && len < BUFSIZE) {
-        /* Cerrar buffer */
-        buffer[len] = 0;
-    } else {
-        buffer[0] = 0;
+    if (strncmp("/pot-1", request.path, 1+strlen("/pot-1")) != 0) {
+        /* Not Found */
+        return RESPONSE_POT_NOT_FOUND;
     }
+
+    if (strncmp("BREW", request.method, 5) == 0
+        || strncmp("POST", request.method, 5) == 0) {
+        return htcpcp_handle_brew(request);
+    }
+
+    if (strncmp("GET", request.method, 4) == 0) {
+        return htcpcp_handle_get(request);
+    }
+
+    if (strncmp("PROPFIND", request.method, 9) == 0) {
+        return htcpcp_handle_propfind(request);
+    }
+
+    if (strncmp("WHEN", request.method, 5) == 0) {
+        return htcpcp_handle_when(request);
+    }
+
+    return RESPONSE_BAD_REQUEST;
+}
+
+/**
+ * Parse HTTP request
+ * @author Jorge Matricali <jorgematricali@gmail.com>
+ * @param  request Destination
+ * @param  buffer  Buffer to be read
+ * @param  len     Buffer size
+ * @return         1 = BAD_REQUEST, 2 = URI_TOO_LONG
+ */
+int http_request_parse(http_request_t *request, const char *buffer, size_t len)
+{
+    int i;
+    int t;
 
     /*
     Parsing request-line
     https://tools.ietf.org/html/rfc2616#section-5.1
     */
-    int i;
-    int t;
 
     /* 5.1.1 Method */
     for (t = 0, i = 0; ; ++i, ++t) {
@@ -360,10 +374,10 @@ void process_request(int socket_fd, const char *source)
             goto parse_error;
         }
         if (buffer[i] == ' ') {
-            request.method[t] = 0;
+            request->method[t] = 0;
             break;
         }
-        request.method[t] = buffer[i];
+        request->method[t] = buffer[i];
     }
     /* 5.1.2 Request-URI */
     for (t = 0, ++i; ; ++i, ++t) {
@@ -372,14 +386,13 @@ void process_request(int socket_fd, const char *source)
             goto parse_error;
         }
         if (t >= 2083) {
-            response = RESPONSE_URI_TOO_LONG;
-            goto send;
+            return 2; /* Request-URI too long */
         }
         if (buffer[i] == ' ') {
-            request.path[t] = 0;
+            request->path[t] = 0;
             break;
         }
-        request.path[t] = buffer[i];
+        request->path[t] = buffer[i];
     }
     /* Request protocol version */
     for (t = 0, ++i; ; ++i, ++t) {
@@ -388,31 +401,19 @@ void process_request(int socket_fd, const char *source)
             goto parse_error;
         }
         if (buffer[i] == '\r' && buffer[i+1] == '\n') {
-            request.protocol[t] = 0;
+            request->protocol[t] = 0;
             ++i;
             break;
         }
-        request.protocol[t] = buffer[i];
-    }
-
-    if (strncmp(PROTOCOL, request.protocol, 1+strlen(PROTOCOL)) != 0) {
-        /* Unsupported protocol */
-        response = RESPONSE_VERSION_NOT_SUPPORTED;
-        goto send;
-    }
-
-    if (strncmp("/pot-1", request.path, 1+strlen("/pot-1")) != 0) {
-        /* Not Found */
-        response = RESPONSE_POT_NOT_FOUND;
-        goto send;
+        request->protocol[t] = buffer[i];
     }
 
     /* 4.2 Message Headers */
     char header_name[2048] = {0};
     char header_value[2048] = {0};
-    request.headers = malloc(sizeof *request.headers);
-    request.headers->length = 0;
-    request.headers->headers = NULL;
+    request->headers = malloc(sizeof *request->headers);
+    request->headers->length = 0;
+    request->headers->headers = NULL;
 
     while (++i) {
         if (i >= len || buffer[i] == 0) {
@@ -459,56 +460,76 @@ void process_request(int socket_fd, const char *source)
             header_value[t] = buffer[i];
         }
 
-        http_header_list_append(request.headers, header_name, header_value);
+        http_header_list_append(request->headers, header_name, header_value);
     }
 
     /* 14.13 Content-Length */
-    request.content_length = 0;
-    const char *content_length_str = http_header_list_find(request.headers,
+    request->content_length = 0;
+    const char *content_length_str = http_header_list_find(request->headers,
         "Content-Length");
 
     if (content_length_str != NULL) {
-        request.content_length = atoi(content_length_str);
+        request->content_length = atoi(content_length_str);
     }
 
-    if (request.content_length < 0) {
+    if (request->content_length < 0) {
         /* 10.4.1 400 Bad Request */
         goto parse_error;
     }
 
     /* 4.3 Message Body */
-    for (t = 0; t < request.content_length && (++i < len); ++t) {
-        request.body[t] = buffer[i];
+    for (t = 0; t < request->content_length && (++i < len); ++t) {
+        request->body[t] = buffer[i];
     }
-    request.body[t] = 0;
-
-    if (strncmp("BREW", request.method, 5) == 0
-        || strncmp("POST", request.method, 5) == 0) {
-        response = htcpcp_handle_brew(request);
-        goto send;
-    }
-
-    if (strncmp("GET", request.method, 4) == 0) {
-        response = htcpcp_handle_get(request);
-        goto send;
-    }
-
-    if (strncmp("PROPFIND", request.method, 9) == 0) {
-        response = htcpcp_handle_propfind(request);
-        goto send;
-    }
-
-    if (strncmp("WHEN", request.method, 5) == 0) {
-        response = htcpcp_handle_when(request);
-        goto send;
-    }
-
-    /* I'm a teapot :D */
-    response = RESPONSE_I_AM_A_TEAPOT;
-    goto send;
+    request->body[t] = 0;
+    return 0;
 
 parse_error:
-    response = RESPONSE_BAD_REQUEST;
+    return 1; /* Bad Request */
+}
+
+void http_request_read(int socket_fd, const char *source)
+{
+    long len;
+    static char buffer[BUFSIZE + 1];
+    time_t timer;
+    struct tm* tm_info;
+
+    /* Request time */
+    time(&timer);
+    tm_info = localtime(&timer);
+
+    /* Parsear cabeceras */
+    http_request_t request = {{0}};
+    http_response_t response = {0};
+
+    /* Read buffer */
+    len = read(socket_fd, buffer, BUFSIZE);
+
+    if (len == 0 || len == -1) {
+        goto cleanup;
+    }
+
+    if (len > 0 && len < BUFSIZE) {
+        /* Cerrar buffer */
+        buffer[len] = 0;
+    } else {
+        buffer[0] = 0;
+    }
+
+    /* Parse HTTP request */
+    int ret = http_request_parse(&request, buffer, len);
+    if (ret == 1) {
+        response = RESPONSE_BAD_REQUEST;
+        goto send;
+    }
+    if (ret == 2) {
+        response = RESPONSE_URI_TOO_LONG;
+        goto send;
+    }
+
+    /* Handle request */
+    response = htcpcp_request_handle(request);
 
 send:
     http_build_response(buffer, response);
@@ -639,7 +660,7 @@ int main(int argc, char *argv[])
                 }
 
                 logger(LOG_DEBUG, "Incoming connection from: %s\n", client_address);
-                process_request(socketfd, client_address);
+                http_request_read(socketfd, client_address);
             }
         }
     }
