@@ -258,6 +258,38 @@ int http_build_response(char *buffer, http_response_t response)
     );
 }
 
+http_response_t htcpcp_handle_brew(http_request_t request) {
+    // @TODO: Add response header "Safe: no"
+    // @TODO: Parse "Accept-Additions" headers
+    // @TODO: 406 Not Acceptable
+    const char *content_type = http_header_list_find(request.headers, "Content-Type");
+
+    if (content_type == NULL ||
+        strcasecmp(content_type, "application/coffee-pot-command") != 0) {
+        /* 10.4.16 415 Unsupported Media Type */
+        return RESPONSE_UNSUPPORTED_MEDIA_TYPE;
+    }
+
+    pot_refresh(POT);
+
+    if (strcmp(request.body, "start") == 0) {
+        if (POT->status == POT_STATUS_BREWING) {
+            return RESPONSE_POT_BUSY;
+        }
+
+        pot_brew(POT);
+
+        return RESPONSE_OK;
+    }
+
+    if (strcmp(request.body, "stop") == 0) {
+        /* It is not yet implemented :D */
+    }
+
+    /* I'm not sure what return code should we use in this case */
+    return RESPONSE_BAD_REQUEST;
+}
+
 void process_request(int socket_fd, const char *source)
 {
     long len;
@@ -425,38 +457,7 @@ void process_request(int socket_fd, const char *source)
 
     if (strncmp("BREW", request.method, 5) == 0
         || strncmp("POST", request.method, 5) == 0) {
-        // @TODO: Add response header "Safe: no"
-        // @TODO: Parse "Accept-Additions" headers
-        // @TODO: 406 Not Acceptable
-        const char *content_type = http_header_list_find(request.headers, "Content-Type");
-
-        if (content_type == NULL ||
-            strcasecmp(content_type, "application/coffee-pot-command") != 0) {
-            /* 10.4.16 415 Unsupported Media Type */
-            response = RESPONSE_UNSUPPORTED_MEDIA_TYPE;
-            goto send;
-        }
-
-        pot_refresh(POT);
-
-        if (strcmp(request.body, "start") == 0) {
-            if (POT->status == POT_STATUS_BREWING) {
-                response = RESPONSE_POT_BUSY;
-                goto send;
-            }
-
-            pot_brew(POT);
-
-            response = RESPONSE_OK;
-            goto send;
-        }
-
-        if (strcmp(request.body, "stop") == 0) {
-            /* It is not yet implemented :D */
-        }
-
-        /* I'm not sure what return code should we use in this case */
-        response = RESPONSE_BAD_REQUEST;
+        response = htcpcp_handle_brew(request);
         goto send;
     }
 
