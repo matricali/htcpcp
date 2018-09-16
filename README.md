@@ -6,7 +6,7 @@ An implementation of Hyper Text Coffee Pot Control Protocol (HTCPCP/1.0)
 defined in [RFC-2324](https://tools.ietf.org/html/rfc2324).
 
 ```
-usage: ./htcpcp-server [-h] [-v] [-p <port>]
+usage: ./htcpcpd [-h] [-v] [-p <port>]
 
   -h                This help
   -v                Verbose mode

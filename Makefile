@@ -3,8 +3,8 @@ CC	= gcc
 CFLAGS	+= -Wall -g -std=gnu99 -O3
 LDFLAGS	+= -lpthread
 
-NAME	= htcpcp-server
-SRCS	= htcpcp-server.c http/request.c http/response.c http/headers.c http/access_log.c logger.c pot.c
+NAME	= htcpcpd
+SRCS	= htcpcpd.c http/request.c http/response.c http/headers.c http/access_log.c logger.c pot.c
 OBJS	= $(SRCS:.c=.o)
 
 all: $(NAME)
