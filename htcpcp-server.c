@@ -18,7 +18,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <stdarg.h> /* va_list, va_start, va_end */
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <sys/mman.h>
@@ -31,22 +30,12 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "http/request.h"
 #include "http/headers.h"
 #include "http/response.h"
+#include "logger.h"
 
 #define BUFSIZE 8096
 #define MAX_CHILDS 10
 #define LISTEN_BACKLOG 500
 #define PROTOCOL "HTCPCP/1.0"
-
-enum log_level {
-    LOG_NONE,
-    LOG_FATAL,
-    LOG_ERROR,
-    LOG_WARNING,
-    LOG_NOTICE,
-    LOG_INFO,
-    LOG_DEBUG,
-    LOG_NEVER
-};
 
 /* Coffee Pot */
 typedef enum pot_status {
@@ -77,26 +66,6 @@ http_response_t RESPONSE_VERSION_NOT_SUPPORTED = {505, "HTTP Version Not Support
 FILE *log_file = NULL;
 int g_verbose = 0;
 static pot_t *POT = NULL;
-
-void logger(enum log_level level, const char *format, ...) {
-    if (level == LOG_NEVER || level == LOG_NONE) {
-        return;
-    }
-    if (level == LOG_DEBUG && g_verbose == 0) {
-        return;
-    }
-
-    FILE *stream = stderr;
-
-    if (level == LOG_INFO || level == LOG_NOTICE || level == LOG_DEBUG) {
-        stream = stdout;
-    }
-
-    va_list args;
-    va_start(args, format);
-    vfprintf(stream, format, args);
-    va_end (args);
-}
 
 void access_log(const char *host, const char *ident, const char *authuser,
     struct tm* tm_info, const char *request_method, const char *request_path,
