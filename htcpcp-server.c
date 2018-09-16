@@ -30,6 +30,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "http/request.h"
 #include "http/headers.h"
+#include "http/response.h"
 
 #define BUFSIZE 8096
 #define MAX_CHILDS 10
@@ -63,13 +64,6 @@ typedef struct {
 } pot_t;
 
 /* HTTP */
-typedef struct {
-    int code;
-    const char *message;
-    const char *headers;
-    const char *body;
-} http_response_t;
-
 http_response_t RESPONSE_OK = {200, "OK", NULL, NULL};
 http_response_t RESPONSE_BAD_REQUEST = {400, "Bad Request", NULL, NULL};
 http_response_t RESPONSE_POT_BUSY = {510, "Pot Busy", "Content-Type: message/coffepot\n", "Pot busy"};
