@@ -260,7 +260,7 @@ int http_build_response(char *buffer, http_response_t response)
 
 void process_request(int socket_fd, const char *source)
 {
-    long ret;
+    long len;
     static char buffer[BUFSIZE + 1];
     time_t timer;
     struct tm* tm_info;
@@ -274,15 +274,15 @@ void process_request(int socket_fd, const char *source)
     http_response_t response = {0};
 
     /* Read buffer */
-    ret = read(socket_fd, buffer, BUFSIZE);
+    len = read(socket_fd, buffer, BUFSIZE);
 
-    if (ret == 0 || ret == -1) {
+    if (len == 0 || len == -1) {
         goto cleanup;
     }
 
-    if (ret > 0 && ret < BUFSIZE) {
+    if (len > 0 && len < BUFSIZE) {
         /* Cerrar buffer */
-        buffer[ret] = 0;
+        buffer[len] = 0;
     } else {
         buffer[0] = 0;
     }
@@ -295,42 +295,53 @@ void process_request(int socket_fd, const char *source)
     int t;
 
     /* 5.1.1 Method */
-    for (i = 0; i < ret; ++i) {
-        if (buffer[i] == 0 || buffer[i] == ' ') {
-            request.method[i] = 0;
+    for (t = 0, i = 0; ; ++i, ++t) {
+        if (i >= len || buffer[i] == 0) {
+            /* We expect a SP as a token separator */
+            goto parse_error;
+        }
+        if (buffer[i] == ' ') {
+            request.method[t] = 0;
             break;
         }
-        request.method[i] = buffer[i];
+        request.method[t] = buffer[i];
     }
     /* 5.1.2 Request-URI */
-    for (t = 0, ++i; i < ret; ++i) {
-        if (buffer[i] == 0 || buffer[i] == ' ') {
-            request.path[t] = 0;
-            break;
+    for (t = 0, ++i; ; ++i, ++t) {
+        if (i >= len || buffer[i] == 0) {
+            /* We expect a SP as a token separator */
+            goto parse_error;
         }
         if (t >= 2083) {
             response = RESPONSE_URI_TOO_LONG;
             goto send;
         }
+        if (buffer[i] == ' ') {
+            request.path[t] = 0;
+            break;
+        }
         request.path[t] = buffer[i];
-        t++;
     }
     /* Request protocol version */
-    for (t = 0; ++i < ret;) {
-        if (buffer[i] == 0 || buffer[i] == ' '
-        || (buffer[i] == '\r' && buffer[i+1] == '\n')) {
+    for (t = 0, ++i; ; ++i, ++t) {
+        if (i >= len || buffer[i] == 0 || buffer[i] == ' ') {
+            /* We expect a CRLF */
+            goto parse_error;
+        }
+        if (buffer[i] == '\r' && buffer[i+1] == '\n') {
             request.protocol[t] = 0;
             ++i;
             break;
         }
         request.protocol[t] = buffer[i];
-        t++;
     }
+
     if (strncmp(PROTOCOL, request.protocol, 1+strlen(PROTOCOL)) != 0) {
         /* Unsupported protocol */
         response = RESPONSE_VERSION_NOT_SUPPORTED;
         goto send;
     }
+
     if (strncmp("/pot-1", request.path, 1+strlen("/pot-1")) != 0) {
         /* Not Found */
         response = RESPONSE_POT_NOT_FOUND;
@@ -344,76 +355,73 @@ void process_request(int socket_fd, const char *source)
     request.headers->length = 0;
     request.headers->headers = NULL;
 
-    while (i++ < ret - 1) {
+    while (++i) {
+        if (i >= len || buffer[i] == 0) {
+            /* We expect a CRLF */
+            goto parse_error;
+        }
         if (buffer[i] == '\r' && buffer[i+1] == '\n') {
             ++i;
             break;
         }
         /* Nombre */
-        char f = 0;
-        for (t = 0; i < ret; ++i) {
-            if (f == 0 && buffer[i] == ' ') {
-                continue;
+        while (i < len && buffer[i] == ' ') {
+            ++i;
+        }
+        for (t = 0; ; ++i, ++t) {
+            if (i >= len || buffer[i] == 0) {
+                /* We expect ':' as a separator */
+                goto parse_error;
             }
-            f = 1;
-            if (buffer[i] == 0 || buffer[i] == ':') {
+            if (buffer[i] == ':') {
                 header_name[t] = 0;
                 break;
             }
             if (buffer[i] == '\r' && buffer[i+1] == '\n') {
                 header_name[t] = 0;
-                ++i;
+                --i; /* Parse again as an empty header value */
                 break;
             }
             header_name[t] = buffer[i];
-            t++;
         }
+        /* Leading whitespaces */
+        while (++i < len && buffer[i] == ' ') {}
         /* Valor */
-        f = 0;
-        for (t = 0; ++i < ret;) {
-            if (f == 0 && buffer[i] == ' ') {
-                continue;
+        for (t = 0; ; ++i, ++t) {
+            if (i >= len || buffer[i] == 0) {
+                /* We expect a CRLF */
+                goto parse_error;
             }
-            f = 1;
-            if (buffer[i] == 0
-            || (buffer[i] == '\r' && buffer[i+1] == '\n')) {
+            if (buffer[i] == '\r' && buffer[i+1] == '\n') {
                 header_value[t] = 0;
-                if (buffer[i] == '\r' && buffer[i+1] == '\n') {
-                    ++i;
-                }
+                ++i;
                 break;
             }
             header_value[t] = buffer[i];
-            t++;
         }
 
         http_header_list_append(request.headers, header_name, header_value);
     }
 
     /* 14.13 Content-Length */
-    int content_length = 0;
+    request.content_length = 0;
     const char *content_length_str = http_header_list_find(request.headers,
         "Content-Length");
 
     if (content_length_str != NULL) {
-        content_length = atoi(content_length_str);
+        request.content_length = atoi(content_length_str);
     }
 
-    if (content_length < 0) {
+    if (request.content_length < 0) {
         /* 10.4.1 400 Bad Request */
-        response = RESPONSE_BAD_REQUEST;
-        goto send;
+        goto parse_error;
     }
 
     /* 4.3 Message Body */
-    int b = 0;
-    for (; b < content_length && (++i < ret); ++b) {
-        request.body[b] = buffer[i];
+    for (t = 0; t < request.content_length && (++i < len); ++t) {
+        request.body[t] = buffer[i];
     }
-    request.body[b] = 0;
-
-
-    // @TODO: Validate resource
+    request.body[t] = 0;
 
     if (strncmp("BREW", request.method, 5) == 0
         || strncmp("POST", request.method, 5) == 0) {
@@ -479,6 +487,10 @@ void process_request(int socket_fd, const char *source)
 
     /* I'm a teapot :D */
     response = RESPONSE_I_AM_A_TEAPOT;
+    goto send;
+
+parse_error:
+    response = RESPONSE_BAD_REQUEST;
 
 send:
     http_build_response(buffer, response);
