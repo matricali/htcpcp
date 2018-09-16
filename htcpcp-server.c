@@ -70,6 +70,22 @@ typedef struct {
     int length;
 } http_header_list_t;
 
+typedef struct {
+    const int code;
+    const char *message;
+    const char *headers;
+    const char *body;
+} http_response_t;
+
+http_response_t RESPONSE_OK = {200, "OK", NULL, NULL};
+http_response_t RESPONSE_BAD_REQUEST = {400, "Bad Request", NULL, NULL};
+http_response_t RESPONSE_POT_BUSY = {510, "Pot Busy", "Content-Type: message/coffepot\n", "Pot busy"};
+http_response_t RESPONSE_POT_READY = {200, "OK", "Content-Type: message/coffepot\n", "Pot ready to brew"};
+http_response_t RESPONSE_URI_TOO_LONG = {414, "Request-URI Too Long", NULL, NULL};
+http_response_t RESPONSE_UNSUPPORTED_MEDIA_TYPE = {415, "Unsupported Media Type", NULL, NULL};
+http_response_t RESPONSE_I_AM_A_TEAPOT = {418, "Unsupported Media Type", NULL, NULL};
+http_response_t RESPONSE_VERSION_NOT_SUPPORTED = {505, "HTTP Version Not Supported", NULL, NULL};
+
 FILE *log_file = NULL;
 int g_verbose = 0;
 static pot_t *POT = NULL;
@@ -211,51 +227,27 @@ void http_header_list_destroy(http_header_list_t *list)
     }
 }
 
-int build_response(char *buffer, int status, const char *headers,
-    const char *body)
+int http_build_response(char *buffer, http_response_t response)
 {
     int len = 0;
-    char status_line[50] = "Unknown";
 
-    if (status == 503) {
-        strncpy(status_line, "Service Unavailable", 50);
-    }
-    if (status == 505) {
-        strncpy(status_line, "HTTP Version Not Supported", 50);
-    }
-    if (status == 400) {
-        strncpy(status_line, "Bad Request", 50);
-    }
-    if (status == 406) {
-        strncpy(status_line, "Not Acceptable", 50);
-    }
-    if (status == 415) {
-        strncpy(status_line, "Unsupported Media Type", 50);
-    }
-    if (status == 418) {
-        strncpy(status_line, "I'm a teapot", 50);
-    }
-    if (status == 414) {
-        strncpy(status_line, "Request-URI Too Long", 50);
-    }
-    if (status == 200) {
-        strncpy(status_line, "OK", 50);
-    }
-    if (body != NULL) {
-        len = strlen(body);
+    if (response.body != NULL) {
+        len = strlen(response.body);
     }
 
-    return sprintf(
+    sprintf(
         buffer,
         "%s %d %s\n%sServer: %s\nContent-Length: %d\nConnection: close\n\n%s",
         PROTOCOL,
-        status,
-        status_line,
-        (headers != NULL ? headers : ""),
+        response.code,
+        response.message,
+        (response.headers != NULL ? response.headers : ""),
         "jorge-matricali/htcpcp",
         len,
-        (body != NULL ? body : "")
+        (response.body != NULL ? response.body : "")
     );
+
+    return response.code;
 }
 
 void process_request(int socket_fd, const char *source)
@@ -313,8 +305,7 @@ void process_request(int socket_fd, const char *source)
             break;
         }
         if (t >= 2083) {
-            status_code = 414;
-            build_response(buffer, status_code, NULL, NULL);
+            status_code = http_build_response(buffer, RESPONSE_URI_TOO_LONG);
             goto send;
         }
         request_path[t] = buffer[i];
@@ -333,8 +324,7 @@ void process_request(int socket_fd, const char *source)
     }
     if (strncmp(PROTOCOL, request_protocol, 1+strlen(PROTOCOL)) != 0) {
         /* Unsupported protocol */
-        status_code = 505;
-        build_response(buffer, status_code, NULL, NULL);
+        status_code = http_build_response(buffer, RESPONSE_VERSION_NOT_SUPPORTED);
         goto send;
     }
 
@@ -402,8 +392,7 @@ void process_request(int socket_fd, const char *source)
 
     if (content_length < 0) {
         /* 10.4.1 400 Bad Request */
-        status_code = 400;
-        build_response(buffer, status_code, NULL, NULL);
+        status_code = http_build_response(buffer, RESPONSE_BAD_REQUEST);
         goto send;
     }
 
@@ -427,8 +416,7 @@ void process_request(int socket_fd, const char *source)
         if (content_type == NULL ||
             strcasecmp(content_type, "application/coffee-pot-command") != 0) {
             /* 10.4.16 415 Unsupported Media Type */
-            status_code = 415;
-            build_response(buffer, status_code, NULL, NULL);
+            status_code = http_build_response(buffer, RESPONSE_UNSUPPORTED_MEDIA_TYPE);
             goto send;
         }
 
@@ -436,15 +424,13 @@ void process_request(int socket_fd, const char *source)
 
         if (strcmp(request_body, "start") == 0) {
             if (POT->status == POT_STATUS_BREWING) {
-                status_code = 510;
-                build_response(buffer, status_code, NULL, "Pot busy\n");
+                status_code = http_build_response(buffer, RESPONSE_POT_BUSY);
                 goto send;
             }
 
             pot_brew(POT);
 
-            status_code = 200;
-            build_response(buffer, status_code, NULL, NULL);
+            status_code = http_build_response(buffer, RESPONSE_OK);
             goto send;
         }
 
@@ -453,14 +439,12 @@ void process_request(int socket_fd, const char *source)
         }
 
         /* I'm not sure what return code should we use in this case */
-        status_code = 415;
-        build_response(buffer, status_code, NULL, NULL);
+        status_code = http_build_response(buffer, RESPONSE_UNSUPPORTED_MEDIA_TYPE);
         goto send;
     }
 
     if (strncmp("GET", request_method, 4) == 0) {
-        status_code = 200;
-        build_response(buffer, status_code, NULL, "<h1>GET received</h1>\n:)");
+        status_code = http_build_response(buffer, RESPONSE_OK);
         goto send;
     }
 
@@ -468,27 +452,27 @@ void process_request(int socket_fd, const char *source)
         pot_refresh(POT);
 
         if (POT->status != POT_STATUS_READY) {
-            status_code = 510;
-            build_response(buffer, status_code, "Content-Type: message/coffepot\n",
-                "Pot busy\n");
+            status_code = http_build_response(buffer, RESPONSE_POT_BUSY);
             goto send;
         }
 
-        status_code = 200;
-        build_response(buffer, status_code, "Content-Type: message/coffepot\n",
-            "Pot ready to brew\n");
+        status_code = http_build_response(buffer, RESPONSE_POT_READY);
         goto send;
     }
 
     if (strncmp("WHEN", request_method, 5) == 0) {
-        status_code = 406;
-        build_response(buffer, status_code, "Additions-List: MILK\n", NULL);
+        http_response_t response = {
+            .code = 406,
+            .message = "Not Acceptable",
+            .headers = "Additions-List: MILK\n",
+            .body = NULL
+        };
+        status_code = http_build_response(buffer, response);
         goto send;
     }
 
     /* I'm a teapot :D */
-    status_code = 418;
-    build_response(buffer, status_code, NULL, NULL);
+    status_code = http_build_response(buffer, RESPONSE_I_AM_A_TEAPOT);
 
 send:
     write(socket_fd, buffer, strlen(buffer));
