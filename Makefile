@@ -4,7 +4,7 @@ CFLAGS	+= -Wall -g -std=gnu99 -O3
 LDFLAGS	+=
 
 NAME	= htcpcp-server
-SRCS	= $(shell find . -name "**.c")
+SRCS	= htcpcp-server.c http/request.c http/response.c http/headers.c http/access_log.c logger.c pot.c
 OBJS	= $(SRCS:.c=.o)
 
 all: $(NAME)

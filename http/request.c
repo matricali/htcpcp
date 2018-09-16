@@ -15,9 +15,15 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 #include <stdlib.h> /* malloc */
+#include <unistd.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <time.h>
 
 #include "request.h"
 #include "headers.h"
+#include "access_log.h"
+#include "../logger.h"
 
 /**
  * Parse HTTP request from buffer into http_request_t struct
@@ -156,4 +162,61 @@ int http_request_parse(http_request_t *request, const char *buffer, size_t len)
 
 parse_error:
     return 1; /* Bad Request */
+}
+
+void http_request_read(int socket_fd, const char *source,
+    const char *protocol, http_response_t (*handle)(http_request_t))
+{
+    long len;
+    static char buffer[BUFSIZE + 1];
+    time_t timer;
+    struct tm* tm_info;
+
+    /* Request time */
+    time(&timer);
+    tm_info = localtime(&timer);
+
+    /* Parsear cabeceras */
+    http_request_t request = {{0}};
+    http_response_t response = {0};
+
+    /* Read buffer */
+    len = read(socket_fd, buffer, BUFSIZE);
+
+    if (len == 0 || len == -1) {
+        goto cleanup;
+    }
+
+    if (len > 0 && len < BUFSIZE) {
+        /* Cerrar buffer */
+        buffer[len] = 0;
+    } else {
+        buffer[0] = 0;
+    }
+
+    /* Parse HTTP request */
+    int ret = http_request_parse(&request, buffer, len);
+    if (ret == 1) {
+        response = RESPONSE_BAD_REQUEST;
+        goto send;
+    }
+    if (ret == 2) {
+        response = RESPONSE_URI_TOO_LONG;
+        goto send;
+    }
+
+    /* Handle request */
+    response = handle(request);
+
+send:
+    http_response_build(buffer, protocol, response);
+    write(socket_fd, buffer, strlen(buffer));
+    access_log_write(source, "-", "-", tm_info, request.method, request.path,
+        request.protocol, response.code, strlen(buffer));
+
+cleanup:
+    logger(LOG_DEBUG, "Closing connection.\n");
+    shutdown(socket_fd, SHUT_RDWR);
+    close(socket_fd);
+    http_header_list_destroy(request.headers);
 }

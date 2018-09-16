@@ -14,31 +14,29 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
-
 #include <stdio.h>
-#include <stdarg.h> /* va_list, va_start, va_end */
+#include <string.h>
 
-#include "logger.h"
+#include "response.h"
 
-int g_verbose;
-
-void logger(enum log_level level, const char *format, ...)
+int http_response_build(char *buffer, const char *protocol,
+    http_response_t response)
 {
-    if (level == LOG_NEVER || level == LOG_NONE) {
-        return;
-    }
-    if (level == LOG_DEBUG && g_verbose == 0) {
-        return;
-    }
+    int len = 0;
 
-    FILE *stream = stderr;
-
-    if (level == LOG_INFO || level == LOG_NOTICE || level == LOG_DEBUG) {
-        stream = stdout;
+    if (response.body != NULL) {
+        len = strlen(response.body);
     }
 
-    va_list args;
-    va_start(args, format);
-    vfprintf(stream, format, args);
-    va_end (args);
+    return sprintf(
+        buffer,
+        "%s %d %s\n%sServer: %s\nContent-Length: %d\nConnection: close\n\n%s",
+        protocol,
+        response.code,
+        response.message,
+        (response.headers != NULL ? response.headers : ""),
+        "jorge-matricali/htcpcp",
+        len,
+        (response.body != NULL ? response.body : "")
+    );
 }

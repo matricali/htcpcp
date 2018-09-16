@@ -27,72 +27,23 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <time.h>
 #include <pthread.h>
 
-#include "http/request.h"
 #include "http/headers.h"
+#include "http/request.h"
 #include "http/response.h"
+#include "http/access_log.h"
 #include "logger.h"
 #include "pot.h"
 
-#define BUFSIZE 8096
 #define MAX_CHILDS 10
 #define LISTEN_BACKLOG 500
 #define PROTOCOL "HTCPCP/1.0"
 
-/* HTTP */
-http_response_t RESPONSE_OK = {200, "OK", NULL, NULL};
-http_response_t RESPONSE_BAD_REQUEST = {400, "Bad Request", NULL, NULL};
-http_response_t RESPONSE_POT_BUSY = {510, "Pot Busy", "Content-Type: message/coffepot\n", "Pot busy"};
-http_response_t RESPONSE_POT_READY = {200, "OK", "Content-Type: message/coffepot\n", "Pot ready to brew"};
-http_response_t RESPONSE_POT_NOT_FOUND = {404, "Pot Not Found", NULL, NULL};
-http_response_t RESPONSE_URI_TOO_LONG = {414, "Request-URI Too Long", NULL, NULL};
-http_response_t RESPONSE_UNSUPPORTED_MEDIA_TYPE = {415, "Unsupported Media Type", NULL, NULL};
-http_response_t RESPONSE_I_AM_A_TEAPOT = {418, "I'm a teapot", "Content-Type: text/plain\n", "I'm a teapot"};
-http_response_t RESPONSE_VERSION_NOT_SUPPORTED = {505, "HTTP Version Not Supported", NULL, NULL};
-
-FILE *log_file = NULL;
 int g_verbose = 0;
 static pot_t *POT = NULL;
 
-void access_log(const char *host, const char *ident, const char *authuser,
-    struct tm* tm_info, const char *request_method, const char *request_path,
-    const char *request_protocol, int status, int bytes)
-{
-    char datetime[27];
-    strftime(datetime, 27, "%d/%b/%Y:%H:%M:%S %z", tm_info);
-
-    logger(LOG_INFO, "%s %s %s [%s] \"%s %s %s\" %d %d\n",
-        host, "-", "-", datetime, request_method, request_path,
-        request_protocol, status, bytes);
-
-    if (log_file > 0) {
-        fprintf(log_file, "%s %s %s [%s] \"%s %s %s\" %d %d\n",
-            host, "-", "-", datetime, request_method, request_path,
-            request_protocol, status, bytes);
-        fflush(log_file);
-    }
-}
-
-/* HTTP */
-int http_build_response(char *buffer, http_response_t response)
-{
-    int len = 0;
-
-    if (response.body != NULL) {
-        len = strlen(response.body);
-    }
-
-    return sprintf(
-        buffer,
-        "%s %d %s\n%sServer: %s\nContent-Length: %d\nConnection: close\n\n%s",
-        PROTOCOL,
-        response.code,
-        response.message,
-        (response.headers != NULL ? response.headers : ""),
-        "jorge-matricali/htcpcp",
-        len,
-        (response.body != NULL ? response.body : "")
-    );
-}
+static http_response_t RESPONSE_POT_BUSY = {510, "Pot Busy", "Content-Type: message/coffepot\n", "Pot busy"};
+static http_response_t RESPONSE_POT_READY = {200, "OK", "Content-Type: message/coffepot\n", "Pot ready to brew"};
+static http_response_t RESPONSE_POT_NOT_FOUND = {404, "Pot Not Found", NULL, NULL};
 
 http_response_t htcpcp_handle_brew(http_request_t request)
 {
@@ -185,62 +136,6 @@ http_response_t htcpcp_request_handle(http_request_t request)
     return RESPONSE_BAD_REQUEST;
 }
 
-void http_request_read(int socket_fd, const char *source)
-{
-    long len;
-    static char buffer[BUFSIZE + 1];
-    time_t timer;
-    struct tm* tm_info;
-
-    /* Request time */
-    time(&timer);
-    tm_info = localtime(&timer);
-
-    /* Parsear cabeceras */
-    http_request_t request = {{0}};
-    http_response_t response = {0};
-
-    /* Read buffer */
-    len = read(socket_fd, buffer, BUFSIZE);
-
-    if (len == 0 || len == -1) {
-        goto cleanup;
-    }
-
-    if (len > 0 && len < BUFSIZE) {
-        /* Cerrar buffer */
-        buffer[len] = 0;
-    } else {
-        buffer[0] = 0;
-    }
-
-    /* Parse HTTP request */
-    int ret = http_request_parse(&request, buffer, len);
-    if (ret == 1) {
-        response = RESPONSE_BAD_REQUEST;
-        goto send;
-    }
-    if (ret == 2) {
-        response = RESPONSE_URI_TOO_LONG;
-        goto send;
-    }
-
-    /* Handle request */
-    response = htcpcp_request_handle(request);
-
-send:
-    http_build_response(buffer, response);
-    write(socket_fd, buffer, strlen(buffer));
-    access_log(source, "-", "-", tm_info, request.method, request.path,
-        request.protocol, response.code, strlen(buffer));
-
-cleanup:
-    logger(LOG_DEBUG, "Closing connection.\n");
-    shutdown(socket_fd, SHUT_RDWR);
-    close(socket_fd);
-    http_header_list_destroy(request.headers);
-}
-
 void usage(const char *p)
 {
     printf("\nusage: %s [-h] [-v] [-p <port>]\n\n", p);
@@ -281,10 +176,7 @@ int main(int argc, char *argv[])
     }
 
     /* Access log */
-    log_file = fopen("access.log", "a");
-    if (log_file < 0) {
-        logger(LOG_ERROR, "Error opening log file.\n");
-    }
+    access_log_open("access.log");
 
     logger(LOG_INFO, "Starting htcpcp-server on port %d...\n", port);
 
@@ -357,7 +249,7 @@ int main(int argc, char *argv[])
                 }
 
                 logger(LOG_DEBUG, "Incoming connection from: %s\n", client_address);
-                http_request_read(socketfd, client_address);
+                http_request_read(socketfd, client_address, PROTOCOL, &htcpcp_request_handle);
             }
         }
     }
@@ -369,7 +261,5 @@ int main(int argc, char *argv[])
     pot_destroy(POT);
 
     /* Access log */
-    if (log_file != NULL) {
-        fclose(log_file);
-    }
+    access_log_close();
 }

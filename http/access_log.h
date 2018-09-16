@@ -15,30 +15,15 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#ifndef HTTP_ACCESS_LOG_H
+#define HTTP_ACCESS_LOG_H
+
 #include <stdio.h>
-#include <stdarg.h> /* va_list, va_start, va_end */
 
-#include "logger.h"
+FILE *access_log_open(const char *path);
+int access_log_close();
+void access_log_write(const char *host, const char *ident, const char *authuser,
+    struct tm* tm_info, const char *request_method, const char *request_path,
+    const char *request_protocol, int status, int bytes);
 
-int g_verbose;
-
-void logger(enum log_level level, const char *format, ...)
-{
-    if (level == LOG_NEVER || level == LOG_NONE) {
-        return;
-    }
-    if (level == LOG_DEBUG && g_verbose == 0) {
-        return;
-    }
-
-    FILE *stream = stderr;
-
-    if (level == LOG_INFO || level == LOG_NOTICE || level == LOG_DEBUG) {
-        stream = stdout;
-    }
-
-    va_list args;
-    va_start(args, format);
-    vfprintf(stream, format, args);
-    va_end (args);
-}
+#endif /* HTTP_ACCESS_LOG_H */

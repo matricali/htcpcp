@@ -19,6 +19,9 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #define HTTP_REQUEST_H
 
 #include "headers.h"
+#include "response.h"
+
+#define BUFSIZE 8096
 
 typedef struct {
     char method[100];
@@ -30,5 +33,7 @@ typedef struct {
 } http_request_t;
 
 int http_request_parse(http_request_t *request, const char *buffer, size_t len);
+void http_request_read(int socket_fd, const char *source,
+    const char *protocol, http_response_t (*handle)(http_request_t));
 
 #endif /* HTTP_REQUEST_H */
